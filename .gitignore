@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.egg-info
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project specific
+*.log
+error.log
+*.exe
+PictureToG-Code_V*.exe
+
+# Settings (auto-generated)
+settings.json
+
+# Qwen IDE
+.qwen/
+
+# Test coverage
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+.pytest_cache/
+
+# Temporary files
+*.tmp
+*.bak
+
+# Samples (test images) - раскомментируйте, если не хотите хранить в репо
+# Samples/
