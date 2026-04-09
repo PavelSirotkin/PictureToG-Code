@@ -136,6 +136,34 @@
                     <button id="btnPreviewThreshold" class="btn btn-small">👁 Предпросмотр бинаризации</button>
                 </section>
 
+                <!-- Smoothing Parameters -->
+                <section class="control-group" id="smoothingParams">
+                    <h3>Сглаживание контура</h3>
+                    <div class="params-grid">
+                        <div class="param-field">
+                            <label for="smoothPasses"
+                                   title="Алгоритм Chaikin: каждый проход срезает углы, приближая контур к B-сплайну. 0 = выкл., 3-4 = рек.">
+                                Проходов Chaikin (0–8)
+                            </label>
+                            <input type="number" id="smoothPasses" value="3"
+                                   step="1" min="0" max="8">
+                        </div>
+                        <div class="param-field">
+                            <label for="resampleStep"
+                                   title="Равномерный шаг точек G1 вдоль контура (в пикселях изображения). 0 = использовать Аппроксимацию (RDP). Рек: 1.0–2.0 для большинства изображений.">
+                                Шаг точек (px, 0=RDP)
+                            </label>
+                            <input type="number" id="resampleStep" value="1.5"
+                                   step="0.5" min="0">
+                        </div>
+                    </div>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:6px; line-height:1.4;">
+                        💡 <b>Chaikin</b> сглаживает пиксельные углы в кривые.<br>
+                        <b>Шаг точек</b> — равномерный G1 по всему контуру.<br>
+                        <b>Порядок:</b> Chaikin → Шаг/RDP → масштабирование.
+                    </p>
+                </section>
+
                 <!-- Relief Parameters -->
                 <section class="control-group hidden" id="reliefParams">
                     <h3>Параметры рельефа</h3>
