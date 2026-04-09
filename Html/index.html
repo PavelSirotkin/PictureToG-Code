@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PictureToG-Code — Генератор G-кода для ЧПУ</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Header -->
+        <header class="app-header">
+            <h1>PictureToG-Code <span class="version">V 0.9 (Web)</span></h1>
+            <p class="subtitle">Генератор G-кода из растровых изображений для ЧПУ станков</p>
+        </header>
+
+        <div class="main-content">
+            <!-- Left Panel - Controls -->
+            <aside class="controls-panel">
+                
+                <!-- File Operations -->
+                <section class="control-group">
+                    <h3>Файл</h3>
+                    <div class="file-controls">
+                        <input type="file" id="imageInput" accept="image/*" hidden>
+                        <button id="btnOpenImage" class="btn btn-primary">📂 Открыть изображение...</button>
+                    </div>
+                    <div id="imageInfo" class="info-text"></div>
+                </section>
+
+                <!-- Mode Selection -->
+                <section class="control-group">
+                    <h3>Режим обработки</h3>
+                    <div class="mode-selector">
+                        <label class="radio-label">
+                            <input type="radio" name="mode" value="Контур" checked>
+                            <span class="radio-text">Контур</span>
+                        </label>
+                        <label class="radio-label">
+                            <input type="radio" name="mode" value="Рельеф">
+                            <span class="radio-text">Рельеф</span>
+                        </label>
+                    </div>
+                </section>
+
+                <!-- Template Selection -->
+                <section class="control-group">
+                    <h3>Шаблоны</h3>
+                    <select id="templateSelect" class="form-select">
+                        <option value="(нет)">(нет)</option>
+                        <option value="Брелок прямоугольный">Брелок прямоугольный</option>
+                        <option value="Брелок круглый">Брелок круглый</option>
+                        <option value="Табличка с рамкой">Табличка с рамкой</option>
+                        <option value="Звезда">Звезда</option>
+                        <option value="Сердце">Сердце</option>
+                    </select>
+                </section>
+
+                <!-- Common Parameters -->
+                <section class="control-group">
+                    <h3>Общие параметры</h3>
+                    <div class="params-grid">
+                        <div class="param-field">
+                            <label for="toolDiameter">Диаметр фрезы (мм)</label>
+                            <input type="number" id="toolDiameter" value="3.175" step="0.01" min="0.1">
+                        </div>
+                        <div class="param-field">
+                            <label for="feedrate">Подача (мм/мин)</label>
+                            <input type="number" id="feedrate" value="800" step="10" min="1">
+                        </div>
+                        <div class="param-field">
+                            <label for="depth">Глубина (мм)</label>
+                            <input type="number" id="depth" value="2.0" step="0.1" min="0.1">
+                        </div>
+                        <div class="param-field">
+                            <label for="numPasses">Число проходов</label>
+                            <input type="number" id="numPasses" value="1" step="1" min="1">
+                        </div>
+                        <div class="param-field">
+                            <label for="safeZ">Safe Z (мм)</label>
+                            <input type="number" id="safeZ" value="5.0" step="0.1" min="0.1">
+                        </div>
+                        <div class="param-field">
+                            <label for="spindleSpeed">Скорость шпинделя (об/мин)</label>
+                            <input type="number" id="spindleSpeed" value="15000" step="100" min="0">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Contour Parameters -->
+                <section class="control-group" id="contourParams">
+                    <h3>Параметры контура</h3>
+                    <div class="params-grid">
+                        <div class="param-field">
+                            <label for="simplifyEps">Упрощение (мм, 0 = нет)</label>
+                            <input type="number" id="simplifyEps" value="0" step="0.1" min="0">
+                        </div>
+                        <div class="param-field">
+                            <label for="threshold">Порог бинаризации</label>
+                            <input type="range" id="threshold" min="0" max="255" value="128">
+                            <span id="thresholdValue" class="range-value">128</span>
+                        </div>
+                        <div class="param-field">
+                            <label for="blurSize">Размытие (px)</label>
+                            <input type="number" id="blurSize" value="3" step="1" min="0">
+                        </div>
+                        <div class="param-field">
+                            <label for="minArea">Мин. площадь (px²)</label>
+                            <input type="number" id="minArea" value="10" step="1" min="0">
+                        </div>
+                        <div class="param-field">
+                            <label for="approxFactor">Аппроксимация</label>
+                            <input type="number" id="approxFactor" value="0.001" step="0.001" min="0">
+                        </div>
+                        <div class="param-field checkbox-field">
+                            <label>
+                                <input type="checkbox" id="invert" checked>
+                                Инвертировать (тёмное = контур)
+                            </label>
+                        </div>
+                        <div class="param-field checkbox-field">
+                            <label>
+                                <input type="checkbox" id="bridgeMode">
+                                Мостики
+                            </label>
+                        </div>
+                        <div class="param-field">
+                            <label for="bridgeSize">Размер мостика (мм)</label>
+                            <input type="number" id="bridgeSize" value="3.0" step="0.1" min="0.1">
+                        </div>
+                        <div class="param-field">
+                            <label for="bridgeCount">Кол-во мостиков</label>
+                            <input type="number" id="bridgeCount" value="2" step="1" min="1">
+                        </div>
+                    </div>
+                    <button id="btnPreviewThreshold" class="btn btn-small">👁 Предпросмотр бинаризации</button>
+                </section>
+
+                <!-- Smoothing Parameters -->
+                <section class="control-group" id="smoothingParams">
+                    <h3>Сглаживание контура</h3>
+                    <div class="params-grid">
+                        <div class="param-field">
+                            <label for="smoothPasses"
+                                   title="Алгоритм Chaikin: каждый проход срезает углы, приближая контур к B-сплайну. 0 = выкл., 3-4 = рек.">
+                                Проходов Chaikin (0–8)
+                            </label>
+                            <input type="number" id="smoothPasses" value="3"
+                                   step="1" min="0" max="8">
+                        </div>
+                        <div class="param-field">
+                            <label for="resampleStep"
+                                   title="Равномерный шаг точек G1 вдоль контура (в пикселях изображения). 0 = использовать Аппроксимацию (RDP). Рек: 1.0–2.0 для большинства изображений.">
+                                Шаг точек (px, 0=RDP)
+                            </label>
+                            <input type="number" id="resampleStep" value="1.5"
+                                   step="0.5" min="0">
+                        </div>
+                    </div>
+                    <p style="font-size:0.75rem; color:var(--text-muted); margin-top:6px; line-height:1.4;">
+                        💡 <b>Chaikin</b> сглаживает пиксельные углы в кривые.<br>
+                        <b>Шаг точек</b> — равномерный G1 по всему контуру.<br>
+                        <b>Порядок:</b> Chaikin → Шаг/RDP → масштабирование.
+                    </p>
+                </section>
+
+                <!-- Relief Parameters -->
+                <section class="control-group hidden" id="reliefParams">
+                    <h3>Параметры рельефа</h3>
+                    <div class="params-grid">
+                        <div class="param-field">
+                            <label for="strategy">Стратегия</label>
+                            <select id="strategy" class="form-select">
+                                <option value="Зигзаг">Зигзаг</option>
+                                <option value="Однонаправленный">Однонаправленный</option>
+                            </select>
+                        </div>
+                        <div class="param-field">
+                            <label for="stepoverPct">Перекрытие (%)</label>
+                            <input type="number" id="stepoverPct" value="40" step="5" min="1" max="100">
+                        </div>
+                        <div class="param-field">
+                            <label for="plungeFeed">Подача врезания (мм/мин)</label>
+                            <input type="number" id="plungeFeed" value="300" step="10" min="1">
+                        </div>
+                        <div class="param-field">
+                            <label for="blurRelief">Размытие карты высот (px)</label>
+                            <input type="number" id="blurRelief" value="5" step="1" min="0">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Output Size -->
+                <section class="control-group">
+                    <h3>Размер вывода (мм)</h3>
+                    <div class="output-size">
+                        <div class="param-field">
+                            <label for="outputWidth">Ширина (W)</label>
+                            <input type="number" id="outputWidth" placeholder="авто" step="1" min="0">
+                        </div>
+                        <button id="btnLockAspect" class="btn-lock locked" title="Сохранять пропорции">🔗</button>
+                        <div class="param-field">
+                            <label for="outputHeight">Высота (H)</label>
+                            <input type="number" id="outputHeight" placeholder="авто" step="1" min="0">
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Generate Button -->
+                <section class="control-group">
+                    <button id="btnGenerate" class="btn btn-generate" disabled>⚙ Сгенерировать G-Code</button>
+                </section>
+            </aside>
+
+            <!-- Center Panel - Preview -->
+            <main class="preview-panel">
+                <div class="preview-header">
+                    <h3>Предпросмотр</h3>
+                    <span id="previewInfo" class="preview-info"></span>
+                </div>
+                <div class="preview-container">
+                    <canvas id="previewCanvas"></canvas>
+                    <div id="previewPlaceholder" class="preview-placeholder">
+                        <div class="placeholder-icon">🖼️</div>
+                        <p>Загрузите изображение для начала работы</p>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Right Panel - G-code Output -->
+            <aside class="gcode-panel" id="gcodePanel">
+                <div class="gcode-header">
+                    <h3>G-код</h3>
+                </div>
+                <div class="gcode-content">
+                    <pre id="gcodeOutput" class="gcode-text"><span class="gcode-comment">; Сгенерируйте G-код для отображения</span></pre>
+                </div>
+                <div class="gcode-footer">
+                    <button id="btnCopyGCode" class="btn btn-small">📋 Копировать</button>
+                    <button id="btnSaveGCode2" class="btn btn-small">💾 Сохранить .nc</button>
+                </div>
+                <!-- Statistics -->
+                <div class="gcode-stats" id="statsSection">
+                    <div class="gcode-stats-title">Статистика</div>
+                    <div id="statsContent" class="gcode-stats-content"></div>
+                </div>
+            </aside>
+        </div>
+    </div>
+
+    <!-- Threshold Preview Modal -->
+    <div id="thresholdModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>Предпросмотр бинаризации</h3>
+                <button id="btnCloseModal" class="btn-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <canvas id="thresholdPreviewCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay hidden">
+        <div class="loading-spinner">
+            <div class="spinner"></div>
+            <p id="loadingText">Обработка...</p>
+        </div>
+    </div>
+
+    <script src="js/image.js"></script>
+    <script src="js/geometry.js"></script>
+    <script src="js/gcode.js"></script>
+    <script src="js/templates.js"></script>
+    <script src="js/preview.js"></script>
+    <script src="js/app.js"></script>
+</body>
+</html>
