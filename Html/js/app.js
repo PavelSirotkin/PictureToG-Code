@@ -63,6 +63,8 @@ class PictureToGCodeApp {
             bridgeSize: document.getElementById('bridgeSize'),
             bridgeCount: document.getElementById('bridgeCount'),
             btnPreviewThreshold: document.getElementById('btnPreviewThreshold'),
+            smoothPasses: document.getElementById('smoothPasses'),
+            resampleStep: document.getElementById('resampleStep'),
 
             // Рельеф
             reliefParams: document.getElementById('reliefParams'),
@@ -411,12 +413,16 @@ class PictureToGCodeApp {
             const binary = this.imageProcessor.threshold(data, threshold, invert);
 
             // Извлечение контуров
+            const smoothPasses = parseInt(el.smoothPasses.value) || 0;
+            const resampleStep = parseFloat(el.resampleStep.value) || 0;
             chains = this.imageProcessor.extractContours(
                 binary,
                 this.imageProcessor.width,
                 this.imageProcessor.height,
                 minArea,
-                approxFactor
+                approxFactor,
+                smoothPasses,
+                resampleStep
             );
 
             if (chains.length === 0) {
@@ -623,6 +629,8 @@ class PictureToGCodeApp {
             bridgeMode: el.bridgeMode.checked,
             bridgeSize: el.bridgeSize.value,
             bridgeCount: el.bridgeCount.value,
+            smoothPasses: el.smoothPasses.value,
+            resampleStep: el.resampleStep.value,
             stepoverPct: el.stepoverPct.value,
             plungeFeed: el.plungeFeed.value,
             blurRelief: el.blurRelief.value,
@@ -676,6 +684,8 @@ class PictureToGCodeApp {
         if (settings.bridgeMode !== undefined) el.bridgeMode.checked = settings.bridgeMode;
         if (settings.bridgeSize) el.bridgeSize.value = settings.bridgeSize;
         if (settings.bridgeCount) el.bridgeCount.value = settings.bridgeCount;
+        if (settings.smoothPasses !== undefined) el.smoothPasses.value = settings.smoothPasses;
+        if (settings.resampleStep !== undefined) el.resampleStep.value = settings.resampleStep;
         if (settings.stepoverPct) el.stepoverPct.value = settings.stepoverPct;
         if (settings.plungeFeed) el.plungeFeed.value = settings.plungeFeed;
         if (settings.blurRelief) el.blurRelief.value = settings.blurRelief;

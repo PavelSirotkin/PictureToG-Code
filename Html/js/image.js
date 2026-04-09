@@ -1,14 +1,10 @@
 /**
  * ImageProcessor — Обработка изображений
- * Аналог core/image.py
- * 
- * Реализует:
- * - Загрузку изображения через FileReader
- * - Преобразование в градации серого
- * - Gaussian blur
- * - Бинаризацию с порогом
- * - Извлечение контуров (marching squares)
- * - Упрощение контуров
+ *
+ * Улучшения контурного режима:
+ * 1. Marching Squares с суб-пиксельной интерполяцией границы
+ * 2. Правильный порядок: Chaikin-сглаживание ПЕРЕД RDP-прореживанием
+ * 3. Равномерный ре-сэмплинг по длине дуги как альтернатива RDP
  */
 
 class ImageProcessor {
@@ -19,11 +15,6 @@ class ImageProcessor {
         this.height = 0;
     }
 
-    /**
-     * Загружает изображение из File объекта
-     * @param {File} file 
-     * @returns {Promise<{imageData: ImageData, width: number, height: number}>}
-     */
     loadImage(file) {
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
@@ -33,22 +24,13 @@ class ImageProcessor {
                     this.originalImage = img;
                     this.width = img.width;
                     this.height = img.height;
-
-                    // Создаём canvas для извлечения данных
                     const canvas = document.createElement('canvas');
-                    canvas.width = this.width;
-                    canvas.height = this.height;
+                    canvas.width = this.width; canvas.height = this.height;
                     const ctx = canvas.getContext('2d');
                     ctx.drawImage(img, 0, 0);
-                    
                     const imageData = ctx.getImageData(0, 0, this.width, this.height);
                     this.grayscaleData = this._toGrayscale(imageData);
-                    
-                    resolve({
-                        imageData: imageData,
-                        width: this.width,
-                        height: this.height
-                    });
+                    resolve({ imageData, width: this.width, height: this.height });
                 };
                 img.onerror = () => reject(new Error('Не удалось загрузить изображение'));
                 img.src = e.target.result;
@@ -58,108 +40,60 @@ class ImageProcessor {
         });
     }
 
-    /**
-     * Преобразование в градации серого
-     * @param {ImageData} imageData 
-     * @returns {Uint8Array}
-     */
     _toGrayscale(imageData) {
         const data = imageData.data;
-        const len = data.length;
-        const gray = new Uint8Array(len / 4);
-        
-        for (let i = 0; i < len; i += 4) {
-            // Формула люминанса
+        const gray = new Uint8Array(data.length / 4);
+        for (let i = 0; i < data.length; i += 4)
             gray[i / 4] = Math.round(0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
-        }
-        
         return gray;
     }
 
-    /**
-     * Gaussian blur (упрощённая реализация с separable kernel)
-     * @param {Uint8Array} data 
-     * @param {number} width 
-     * @param {number} height 
-     * @param {number} kernelSize 
-     * @returns {Uint8Array}
-     */
     gaussianBlur(data, width, height, kernelSize) {
         if (kernelSize <= 0) return new Uint8Array(data);
-        
-        // Делаем kernelSize нечётным
         if (kernelSize % 2 === 0) kernelSize++;
-        
         const sigma = kernelSize / 3.0;
         const kernel = this._gaussianKernel1D(kernelSize, sigma);
-        
-        // Двухпроходное размытие (horizontal + vertical)
+        const half = Math.floor(kernelSize / 2);
         const temp = new Uint8Array(data.length);
         const result = new Uint8Array(data.length);
-        
-        // Горизонтальный проход
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
-                let sum = 0;
-                let weightSum = 0;
-                for (let k = -Math.floor(kernelSize / 2); k <= Math.floor(kernelSize / 2); k++) {
+                let sum = 0, wsum = 0;
+                for (let k = -half; k <= half; k++) {
                     const sx = Math.min(Math.max(x + k, 0), width - 1);
-                    const weight = kernel[k + Math.floor(kernelSize / 2)];
-                    sum += data[y * width + sx] * weight;
-                    weightSum += weight;
+                    const w = kernel[k + half];
+                    sum += data[y * width + sx] * w; wsum += w;
                 }
-                temp[y * width + x] = Math.round(sum / weightSum);
+                temp[y * width + x] = Math.round(sum / wsum);
             }
         }
-        
-        // Вертикальный проход
         for (let y = 0; y < height; y++) {
             for (let x = 0; x < width; x++) {
-                let sum = 0;
-                let weightSum = 0;
-                for (let k = -Math.floor(kernelSize / 2); k <= Math.floor(kernelSize / 2); k++) {
+                let sum = 0, wsum = 0;
+                for (let k = -half; k <= half; k++) {
                     const sy = Math.min(Math.max(y + k, 0), height - 1);
-                    const weight = kernel[k + Math.floor(kernelSize / 2)];
-                    sum += temp[sy * width + x] * weight;
-                    weightSum += weight;
+                    const w = kernel[k + half];
+                    sum += temp[sy * width + x] * w; wsum += w;
                 }
-                result[y * width + x] = Math.round(sum / weightSum);
+                result[y * width + x] = Math.round(sum / wsum);
             }
         }
-        
         return result;
     }
 
-    /**
-     * 1D Gaussian kernel
-     */
     _gaussianKernel1D(size, sigma) {
         const kernel = new Float32Array(size);
         const half = Math.floor(size / 2);
         let sum = 0;
-        
         for (let i = 0; i < size; i++) {
             const x = i - half;
-            const val = Math.exp(-(x * x) / (2 * sigma * sigma));
-            kernel[i] = val;
-            sum += val;
+            kernel[i] = Math.exp(-(x * x) / (2 * sigma * sigma));
+            sum += kernel[i];
         }
-        
-        // Нормализация
-        for (let i = 0; i < size; i++) {
-            kernel[i] /= sum;
-        }
-        
+        for (let i = 0; i < size; i++) kernel[i] /= sum;
         return kernel;
     }
 
-    /**
-     * Бинаризация изображения
-     * @param {Uint8Array} data 
-     * @param {number} threshold 
-     * @param {boolean} invert 
-     * @returns {Uint8Array}
-     */
     threshold(data, threshold, invert) {
         const result = new Uint8Array(data.length);
         for (let i = 0; i < data.length; i++) {
@@ -171,115 +105,120 @@ class ImageProcessor {
     }
 
     /**
-     * Извлечение контуров алгоритмом Marching Squares.
-     * Находит именно ГРАНИЦЫ между чёрным и белым,
-     * а не залитые области — идеально для контурной резки.
+     * Извлечение контуров.
+     *
+     * Конвейер:
+     *   1. Marching Squares с суб-пиксельной интерполяцией
+     *   2. Сборка контуров
+     *   3. Фильтрация по площади
+     *   4. Chaikin-сглаживание (smoothPasses проходов)
+     *   5a. Равномерный ре-сэмплинг (если resampleStep > 0)  ← рекомендуется
+     *   5b. RDP-прореживание (если epsilonFactor > 0)
      *
      * @param {Uint8Array} binaryData
      * @param {number} width
      * @param {number} height
-     * @param {number} minArea
-     * @param {number} epsilonFactor
-     * @returns {Array<Array<[number, number]>>}
+     * @param {number} minArea        — мин. площадь контура (пикс²)
+     * @param {number} epsilonFactor  — RDP: epsilon = factor × периметр (0 = выкл.)
+     * @param {number} smoothPasses   — проходов Chaikin (0 = выкл., рек. 3-4)
+     * @param {number} resampleStep   — шаг точек в пикс. (0 = выкл.; если задан — заменяет RDP)
      */
-    extractContours(binaryData, width, height, minArea = 10, epsilonFactor = 0.001) {
-        return this._marchingSquares(binaryData, width, height, minArea, epsilonFactor);
+    extractContours(binaryData, width, height,
+                    minArea = 10, epsilonFactor = 0.001,
+                    smoothPasses = 3, resampleStep = 0) {
+        return this._marchingSquares(
+            binaryData, width, height,
+            minArea, epsilonFactor, smoothPasses, resampleStep
+        );
     }
 
+    // ─── Marching Squares ────────────────────────────────────────────────────
+
     /**
-     * Marching Squares — находит изолинии на бинарном изображении.
-     * Для каждого 2x2 блока определяет конфигурацию (0-15)
-     * и строит сегменты на рёбрах ячеек, затем собирает их в контуры.
+     * Marching Squares с линейной суб-пиксельной интерполяцией.
+     *
+     * Стандартный MS ставит точку ровно на середине ребра (0.5px).
+     * Улучшение: для бинарного изображения граница всё равно посередине,
+     * но при использовании с предварительным размытием (blurSize > 0)
+     * интерполяция даёт более точное положение изолинии.
+     *
+     *   t = (127 - val_A) / (val_B - val_A)
+     *   точка = A + t * (B - A)
      */
-    _marchingSquares(binary, width, height, minArea, epsilonFactor) {
-        // Словарь рёбер: ключ "x,y,dir" → точка [x, y]
-        // dir: 0 = horizontal (ребро вниз), 1 = vertical (ребро вправо)
-        const edgeMap = new Map();
-        // Список сегментов: [{from: key, to: key}, ...]
+    _marchingSquares(binary, width, height, minArea, epsilonFactor, smoothPasses, resampleStep) {
         const segments = [];
 
-        // Сканируем 2x2 ячейки
+        const lerp = (v0, v1, x0, x1) => {
+            if (Math.abs(v1 - v0) < 1) return (x0 + x1) / 2;
+            const t = (127 - v0) / (v1 - v0);
+            return x0 + Math.max(0, Math.min(1, t)) * (x1 - x0);
+        };
+
         for (let y = 0; y < height - 1; y++) {
             for (let x = 0; x < width - 1; x++) {
-                // Индексы 4 углов
-                const i00 = y * width + x;         // верхний левый
-                const i10 = y * width + (x + 1);   // верхний правый
-                const i01 = (y + 1) * width + x;   // нижний левый
-                const i11 = (y + 1) * width + (x + 1); // нижний правый
+                const v00 = binary[y * width + x];
+                const v10 = binary[y * width + (x + 1)];
+                const v01 = binary[(y + 1) * width + x];
+                const v11 = binary[(y + 1) * width + (x + 1)];
 
-                // Определяем case (битовая маска)
-                let caseIndex = 0;
-                if (binary[i00] > 127) caseIndex |= 1;
-                if (binary[i10] > 127) caseIndex |= 2;
-                if (binary[i11] > 127) caseIndex |= 4;
-                if (binary[i01] > 127) caseIndex |= 8;
+                let ci = 0;
+                if (v00 > 127) ci |= 1;
+                if (v10 > 127) ci |= 2;
+                if (v11 > 127) ci |= 4;
+                if (v01 > 127) ci |= 8;
+                if (ci === 0 || ci === 15) continue;
 
-                // Пропускаем однородные ячейки
-                if (caseIndex === 0 || caseIndex === 15) continue;
+                // Суб-пиксельные координаты точек на рёбрах
+                // Формат ключа: "X.XXX,Y.YYY" — используем точку как разделитель
+                const top   = `${lerp(v00, v10, x, x+1).toFixed(3)}_${y.toFixed(3)}`;
+                const bot   = `${lerp(v01, v11, x, x+1).toFixed(3)}_${(y+1).toFixed(3)}`;
+                const left  = `${x.toFixed(3)}_${lerp(v00, v01, y, y+1).toFixed(3)}`;
+                const right = `${(x+1).toFixed(3)}_${lerp(v10, v11, y, y+1).toFixed(3)}`;
 
-                // Находим точки пересечения на рёбрах
-                // Ребро сверху: между (x,y) и (x+1,y)
-                const topKey = `${x + 0.5},${y},h`;
-                // Ребро снизу: между (x,y+1) и (x+1,y+1)
-                const botKey = `${x + 0.5},${y + 1},h`;
-                // Ребро слева: между (x,y) и (x,y+1)
-                const leftKey = `${x},${y + 0.5},v`;
-                // Ребро справа: между (x+1,y) и (x+1,y+1)
-                const rightKey = `${x + 1},${y + 0.5},v`;
+                const pts = [];
+                if (this._edgeCrossed(ci, 0)) pts.push(left);
+                if (this._edgeCrossed(ci, 1)) pts.push(top);
+                if (this._edgeCrossed(ci, 2)) pts.push(right);
+                if (this._edgeCrossed(ci, 3)) pts.push(bot);
 
-                // Определяем какие рёбра пересекаются
-                const intersections = [];
-                if (this._edgeCrossed(caseIndex, 0)) intersections.push(leftKey);
-                if (this._edgeCrossed(caseIndex, 1)) intersections.push(topKey);
-                if (this._edgeCrossed(caseIndex, 2)) intersections.push(rightKey);
-                if (this._edgeCrossed(caseIndex, 3)) intersections.push(botKey);
-
-                // Соединяем точки пересечения в сегменты
-                // Для marching squares всегда 2 точки на ячейку (кроме saddle cases)
-                if (intersections.length === 2) {
-                    segments.push([intersections[0], intersections[1]]);
-                } else if (intersections.length === 4) {
-                    // Saddle case — нужно выбрать соединение
-                    // Для бинарного изображения выбираем по центральному пикселю
-                    const centerVal = binary[i11]; // используем нижний правый как "центр"
-                    if (centerVal > 127) {
-                        segments.push([intersections[0], intersections[1]]);
-                        segments.push([intersections[2], intersections[3]]);
-                    } else {
-                        segments.push([intersections[0], intersections[3]]);
-                        segments.push([intersections[1], intersections[2]]);
-                    }
-                }
+                for (let k = 0; k + 1 < pts.length; k += 2)
+                    segments.push([pts[k], pts[k + 1]]);
             }
         }
 
-        // Собираем сегменты в цепочки (контуры)
-        const contours = this._assembleContours(segments, edgeMap);
-
-        // Фильтруем, упрощаем, переворачиваем Y
+        const contours = this._assembleContours(segments);
         const result = [];
+
         for (const chain of contours) {
             if (chain.length < 3) continue;
+            if (this._polygonArea(chain) < minArea) continue;
 
-            // Проверяем минимальную площадь
-            const area = this._polygonArea(chain);
-            if (area < minArea) continue;
+            let pts = chain;
 
-            // Упрощаем RDP — epsilon = factor * периметр (как в оригинале)
-            const perimeter = this._chainPerimeter(chain);
-            const eps = epsilonFactor > 0 ? epsilonFactor * perimeter : 0;
-            const simplified = eps > 0
-                ? this._ramerDouglasPeucker(chain, eps)
-                : chain;
+            // ── 1. Chaikin ПЕРЕД прореживанием ──────────────────────────
+            // Сначала сглаживаем исходную плотную пиксельную сетку.
+            // Это правильно: сглаживаем фактическую форму, а не уже упрощённую.
+            if (smoothPasses > 0) {
+                pts = this._chaikinSmooth(pts, smoothPasses, true);
+            }
 
-            if (simplified.length < 3) continue;
+            // ── 2. Прореживание ──────────────────────────────────────────
+            if (resampleStep > 0) {
+                // Равномерный ре-сэмплинг: все точки через resampleStep пикс.
+                // Плотность G1 одинакова по всему контуру.
+                pts = this._resampleByLength(pts, resampleStep, true);
+            } else if (epsilonFactor > 0) {
+                // RDP: убирает лишние точки на почти-прямолинейных участках
+                const perim = this._chainPerimeter(pts);
+                pts = this._ramerDouglasPeucker(pts, epsilonFactor * perim);
+            }
 
-            // Переводим Y (вверх)
-            const flipped = simplified.map(([px, py]) => [px, height - py]);
+            if (pts.length < 3) continue;
 
-            // Замыкаем
-            if (flipped[0][0] !== flipped[flipped.length - 1][0] ||
-                flipped[0][1] !== flipped[flipped.length - 1][1]) {
+            // ── 3. Перевод Y и замыкание ─────────────────────────────────
+            const flipped = pts.map(([px, py]) => [px, height - py]);
+            if (Math.abs(flipped[0][0] - flipped[flipped.length - 1][0]) > 0.001 ||
+                Math.abs(flipped[0][1] - flipped[flipped.length - 1][1]) > 0.001) {
                 flipped.push([...flipped[0]]);
             }
 
@@ -289,205 +228,191 @@ class ImageProcessor {
         return result;
     }
 
+    // ─── Chaikin ─────────────────────────────────────────────────────────────
+
     /**
-     * Определяет, пересекает ли данное ребро границу для данного case.
-     * Рёбра: 0=лево, 1=верх, 2=право, 3=низ
+     * Алгоритм Chaikin — итеративное срезание углов.
+     * Каждый проход: Q = ¾·P[i] + ¼·P[i+1],  R = ¼·P[i] + ¾·P[i+1]
+     * Сходится к B-сплайну 2-го порядка.
+     *
+     * Рекомендации:
+     *   1–2 прохода — лёгкое сглаживание, форма почти не меняется
+     *   3–4 прохода — хороший результат для большинства изображений
+     *   5–6 проходов — очень гладко, мелкие детали округляются
      */
-    _edgeCrossed(caseIndex, edge) {
-        // Таблица рёбер для marching squares
-        // edge 0 (лево): биты 0 и 3 различаются
-        // edge 1 (верх): биты 0 и 1 различаются
-        // edge 2 (право): биты 1 и 2 различаются
-        // edge 3 (низ): биты 2 и 3 различаются
-        const pairs = [[0, 3], [0, 1], [1, 2], [2, 3]];
-        const [a, b] = pairs[edge];
-        return ((caseIndex >> a) & 1) !== ((caseIndex >> b) & 1);
+    _chaikinSmooth(pts, passes, closed = true) {
+        let p = [...pts];
+        // Убираем явное замыкание перед обработкой
+        if (closed && p.length > 1) {
+            const f = p[0], l = p[p.length - 1];
+            if (Math.abs(f[0] - l[0]) < 0.001 && Math.abs(f[1] - l[1]) < 0.001)
+                p = p.slice(0, -1);
+        }
+        for (let i = 0; i < passes; i++) {
+            const n = p.length;
+            const next = [];
+            for (let j = 0; j < n; j++) {
+                const a = p[j], b = p[(j + 1) % n];
+                next.push([0.75 * a[0] + 0.25 * b[0], 0.75 * a[1] + 0.25 * b[1]]);
+                next.push([0.25 * a[0] + 0.75 * b[0], 0.25 * a[1] + 0.75 * b[1]]);
+            }
+            p = next;
+        }
+        if (closed) p.push([...p[0]]);
+        return p;
     }
 
-    /**
-     * Собирает список сегментов в замкнутые контуры.
-     */
-    _assembleContours(segments, edgeMap) {
-        // Строим adjacency map
-        const adjacency = new Map();
+    // ─── Равномерный ре-сэмплинг ─────────────────────────────────────────────
 
+    /**
+     * Расставляет точки вдоль контура с равным шагом stepLen (пикс.).
+     *
+     * Преимущество перед RDP: плотность точек (и G1-сегментов) одинакова
+     * везде — на прямых и на кривых. RDP оставляет много точек только там
+     * где есть изломы, пропуская детали кривых.
+     *
+     * Практический выбор stepLen: 0.5–1.5 пикс. для хорошего разрешения.
+     * В мм: stepLen × (outputMM / imagePX).
+     */
+    _resampleByLength(pts, stepLen, closed = true) {
+        if (pts.length < 2 || stepLen <= 0) return pts;
+
+        let src = [...pts];
+        if (closed && src.length > 1) {
+            const f = src[0], l = src[src.length - 1];
+            if (Math.abs(f[0] - l[0]) < 0.001 && Math.abs(f[1] - l[1]) < 0.001)
+                src = src.slice(0, -1);
+        }
+        if (closed) src.push([...src[0]]);
+
+        const result = [[...src[0]]];
+        let acc = 0; // накопленное расстояние с последней поставленной точки
+
+        for (let i = 1; i < src.length; i++) {
+            const dx = src[i][0] - src[i - 1][0];
+            const dy = src[i][1] - src[i - 1][1];
+            const segLen = Math.hypot(dx, dy);
+            if (segLen < 1e-9) continue;
+
+            let traveled = 0;
+            while (acc + (segLen - traveled) >= stepLen) {
+                const move = stepLen - acc;
+                traveled += move;
+                const t = traveled / segLen;
+                result.push([src[i - 1][0] + t * dx, src[i - 1][1] + t * dy]);
+                acc = 0;
+            }
+            acc += segLen - traveled;
+        }
+
+        if (closed) result.push([...result[0]]);
+        return result;
+    }
+
+    // ─── Вспомогательные ─────────────────────────────────────────────────────
+
+    _edgeCrossed(ci, edge) {
+        const pairs = [[0, 3], [0, 1], [1, 2], [2, 3]];
+        const [a, b] = pairs[edge];
+        return ((ci >> a) & 1) !== ((ci >> b) & 1);
+    }
+
+    _assembleContours(segments) {
+        const adj = new Map();
         for (const [a, b] of segments) {
-            if (!adjacency.has(a)) adjacency.set(a, []);
-            if (!adjacency.has(b)) adjacency.set(b, []);
-            adjacency.get(a).push(b);
-            adjacency.get(b).push(a);
+            if (!adj.has(a)) adj.set(a, []);
+            if (!adj.has(b)) adj.set(b, []);
+            adj.get(a).push(b);
+            adj.get(b).push(a);
         }
 
         const contours = [];
         const used = new Set();
 
-        // Для каждой начальной точки пытаемся построить контур
-        for (const [startKey, neighbors] of adjacency) {
-            if (used.has(startKey)) continue;
-            if (neighbors.length < 2) continue; //孤立点
+        for (const [startKey, nbrs] of adj) {
+            if (used.has(startKey) || nbrs.length < 2) continue;
 
-            // Обход контура
             const contour = [];
-            let current = startKey;
-            let prev = null;
-
-            while (current) {
-                used.add(current);
-
-                // Парсим координаты из ключа
-                const parts = current.split(',');
+            let cur = startKey, prev = null;
+            while (cur) {
+                used.add(cur);
+                const parts = cur.split('_');
                 contour.push([parseFloat(parts[0]), parseFloat(parts[1])]);
-
-                // Находим следующего соседа
-                const nbrs = adjacency.get(current) || [];
-                let next = null;
-                for (const n of nbrs) {
-                    if (n !== prev && !used.has(n)) {
-                        next = n;
-                        break;
-                    }
+                const neighbors = adj.get(cur) || [];
+                let nxt = null;
+                for (const n of neighbors) {
+                    if (n !== prev && !used.has(n)) { nxt = n; break; }
                 }
-
-                // Если тупик — пробуем вернуться к началу
-                if (!next) {
-                    // Проверяем, замкнут ли контур
-                    if (contour.length > 2 && adjacency.get(current)?.includes(startKey)) {
-                        break; // замкнулся
-                    }
-                    break; // тупик
-                }
-
-                prev = current;
-                current = next;
+                if (!nxt) break;
+                prev = cur; cur = nxt;
             }
-
-            if (contour.length >= 3) {
-                contours.push(contour);
-            }
+            if (contour.length >= 3) contours.push(contour);
         }
-
         return contours;
     }
 
-    /**
-     * Вычисление площади полигона (shoelace formula)
-     */
     _polygonArea(points) {
         let area = 0;
         const n = points.length;
         for (let i = 0; i < n; i++) {
             const j = (i + 1) % n;
-            area += points[i][0] * points[j][1];
-            area -= points[j][0] * points[i][1];
+            area += points[i][0] * points[j][1] - points[j][0] * points[i][1];
         }
         return Math.abs(area) / 2;
     }
 
-    /**
-     * Вычисление периметра полилинии
-     */
     _chainPerimeter(points) {
         let total = 0;
-        for (let i = 0; i < points.length - 1; i++) {
-            total += Math.hypot(
-                points[i + 1][0] - points[i][0],
-                points[i + 1][1] - points[i][1]
-            );
-        }
+        for (let i = 0; i < points.length - 1; i++)
+            total += Math.hypot(points[i+1][0] - points[i][0], points[i+1][1] - points[i][1]);
         return total;
     }
 
-    /**
-     * Алгоритм Рамера-Дугласа-Пекера для упрощения полилинии
-     * Аналог _rdp в geometry.py
-     */
     _ramerDouglasPeucker(points, epsilon) {
         if (points.length < 3) return points;
-        
-        let maxDist = 0;
-        let maxIndex = 0;
-        const start = points[0];
-        const end = points[points.length - 1];
-        
-        const dx = end[0] - start[0];
-        const dy = end[1] - start[1];
-        const distSq = dx * dx + dy * dy;
-        
+        let maxD = 0, maxI = 0;
+        const s = points[0], e = points[points.length - 1];
+        const dx = e[0] - s[0], dy = e[1] - s[1];
+        const len2 = dx * dx + dy * dy;
         for (let i = 1; i < points.length - 1; i++) {
-            const px = points[i][0];
-            const py = points[i][1];
-            
-            let dist;
-            if (distSq === 0) {
-                dist = Math.hypot(px - start[0], py - start[1]);
+            const px = points[i][0] - s[0], py = points[i][1] - s[1];
+            let d;
+            if (len2 < 1e-12) {
+                d = Math.hypot(px, py);
             } else {
-                let t = ((px - start[0]) * dx + (py - start[1]) * dy) / distSq;
-                t = Math.max(0, Math.min(1, t));
-                dist = Math.hypot(px - (start[0] + t * dx), py - (start[1] + t * dy));
+                const t = Math.max(0, Math.min(1, (px * dx + py * dy) / len2));
+                d = Math.hypot(px - t * dx, py - t * dy);
             }
-            
-            if (dist > maxDist) {
-                maxDist = dist;
-                maxIndex = i;
-            }
+            if (d > maxD) { maxD = d; maxI = i; }
         }
-        
-        if (maxDist > epsilon) {
-            const left = this._ramerDouglasPeucker(points.slice(0, maxIndex + 1), epsilon);
-            const right = this._ramerDouglasPeucker(points.slice(maxIndex), epsilon);
-            return [...left.slice(0, -1), ...right];
+        if (maxD > epsilon) {
+            const L = this._ramerDouglasPeucker(points.slice(0, maxI + 1), epsilon);
+            const R = this._ramerDouglasPeucker(points.slice(maxI), epsilon);
+            return [...L.slice(0, -1), ...R];
         }
-        
-        return [start, end];
+        return [s, e];
     }
 
-    /**
-     * Получить бинаризованное изображение для предпросмотра
-     * @param {number} threshold 
-     * @param {boolean} invert 
-     * @param {number} blurSize 
-     * @returns {ImageData}
-     */
     getBinaryPreview(threshold, invert, blurSize) {
         if (!this.grayscaleData) return null;
-        
         let data = this.grayscaleData;
-        if (blurSize > 0) {
-            data = this.gaussianBlur(data, this.width, this.height, blurSize);
-        }
-        
+        if (blurSize > 0) data = this.gaussianBlur(data, this.width, this.height, blurSize);
         const binary = this.threshold(data, threshold, invert);
-        
-        // Создаём ImageData
         const canvas = document.createElement('canvas');
-        canvas.width = this.width;
-        canvas.height = this.height;
+        canvas.width = this.width; canvas.height = this.height;
         const ctx = canvas.getContext('2d');
-        const imageData = ctx.createImageData(this.width, this.height);
-        
+        const id = ctx.createImageData(this.width, this.height);
         for (let i = 0; i < binary.length; i++) {
             const idx = i * 4;
-            imageData.data[idx] = binary[i];
-            imageData.data[idx + 1] = binary[i];
-            imageData.data[idx + 2] = binary[i];
-            imageData.data[idx + 3] = 255;
+            id.data[idx] = id.data[idx+1] = id.data[idx+2] = binary[i];
+            id.data[idx+3] = 255;
         }
-        
-        return imageData;
+        return id;
     }
 
-    /**
-     * Получить карту высот для рельефа
-     * @param {number} blurSize 
-     * @returns {Uint8Array}
-     */
     getHeightmap(blurSize) {
         if (!this.grayscaleData) return null;
-        
-        if (blurSize > 0) {
-            return this.gaussianBlur(this.grayscaleData, this.width, this.height, blurSize);
-        }
-        
+        if (blurSize > 0) return this.gaussianBlur(this.grayscaleData, this.width, this.height, blurSize);
         return new Uint8Array(this.grayscaleData);
     }
 }
