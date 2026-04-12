@@ -40,6 +40,7 @@ class SettingsManager:
         "num_passes": "1", "safe_z": "5.0", "spindle_speed": "15000",
         "simplify_eps": "0", "threshold": "128", "blur_size": "3",
         "min_area": "10", "approx_factor": "0.001",
+        "smooth_passes": "3", "resample_step": "0",
         "invert": True, "bridge_mode": False, "bridge_size": "3.0", "bridge_count": "2",
         "stepover_pct": "40", "plunge_feed": "300", "blur_relief": "5",
         "strategy": "Зигзаг",
@@ -246,21 +247,28 @@ class CamApp(tk.Tk):
         self.v_approx   = row(self.frm_contour, "Аппроксимация:", "0.001", 10, "0-0.05",
                              {"type": "float", "name": "Аппроксимация", "min_val": 0, "max_val": 0.1})
 
+        self.v_smooth_passes = row(
+            self.frm_contour, "Проходов Chaikin (0–8):", "3", 11, "0=выкл.",
+            {"type": "int", "name": "Проходов Chaikin", "min_val": 0, "max_val": 8})
+        self.v_resample_step = row(
+            self.frm_contour, "Шаг ре-сэмплинга (px, 0=нет):", "0", 12, "px",
+            {"type": "float", "name": "Шаг ре-сэмплинга", "min_val": 0, "max_val": 100.0})
+
         self.v_invert = tk.BooleanVar(value=True)
         ttk.Checkbutton(self.frm_contour, text="Инвертировать (тёмное = контур)",
                         variable=self.v_invert).grid(
-            row=11, column=0, columnspan=3, sticky="w", pady=3)
+            row=13, column=0, columnspan=3, sticky="w", pady=3)
 
         # Мостики
         ttk.Separator(self.frm_contour, orient="horizontal").grid(
-            row=12, columnspan=3, sticky="ew", pady=6)
+            row=14, columnspan=3, sticky="ew", pady=6)
         self.v_bridge = tk.BooleanVar(value=False)
         ttk.Checkbutton(self.frm_contour, text="Мостики (bridges)",
                         variable=self.v_bridge).grid(
-            row=13, column=0, columnspan=3, sticky="w")
-        self.v_bsize = row(self.frm_contour, "Размер мостика (мм):", "3.0", 14, "",
+            row=15, column=0, columnspan=3, sticky="w")
+        self.v_bsize = row(self.frm_contour, "Размер мостика (мм):", "3.0", 16, "",
                           {"type": "float", "name": "Размер мостика", "min_val": 0.1, "max_val": 20.0})
-        self.v_bnum  = row(self.frm_contour, "Кол-во мостиков:", "2", 15, "",
+        self.v_bnum  = row(self.frm_contour, "Кол-во мостиков:", "2", 17, "",
                           {"type": "int", "name": "Кол-во мостиков", "min_val": 1, "max_val": 20})
 
         # ── Секция: Рельефные параметры ──
@@ -458,6 +466,8 @@ class CamApp(tk.Tk):
         self.v_blur.set(s.get("blur_size", "3"))
         self.v_min_area.set(s.get("min_area", "10"))
         self.v_approx.set(s.get("approx_factor", "0.001"))
+        self.v_smooth_passes.set(s.get("smooth_passes", "3"))
+        self.v_resample_step.set(s.get("resample_step", "0"))
         self.v_invert.set(s.get("invert", True))
         self.v_bridge.set(s.get("bridge_mode", False))
         self.v_bsize.set(s.get("bridge_size", "3.0"))
@@ -481,6 +491,7 @@ class CamApp(tk.Tk):
         vars_to_save = [
             self.v_tool, self.v_feed, self.v_depth, self.v_passes, self.v_safe,
             self.v_spindle, self.v_simp, self.v_thresh, self.v_blur, self.v_min_area, self.v_approx,
+            self.v_smooth_passes, self.v_resample_step,
             self.v_bsize, self.v_bnum, self.v_stepover, self.v_plunge_feed,
             self.v_blur_relief, self.v_out_w, self.v_out_h,
         ]
@@ -512,6 +523,8 @@ class CamApp(tk.Tk):
         s.set("blur_size", self.v_blur.get())
         s.set("min_area", self.v_min_area.get())
         s.set("approx_factor", self.v_approx.get())
+        s.set("smooth_passes", self.v_smooth_passes.get())
+        s.set("resample_step", self.v_resample_step.get())
         s.set("invert", self.v_invert.get())
         s.set("bridge_mode", self.v_bridge.get())
         s.set("bridge_size", self.v_bsize.get())
@@ -817,6 +830,8 @@ class CamApp(tk.Tk):
                     blur_size=self._int(self.v_blur, 3),
                     min_area=self._float(self.v_min_area, 10),
                     epsilon_factor=self._float(self.v_approx, 0.001),
+                    smooth_passes=self._int(self.v_smooth_passes, 3),
+                    resample_step=self._float(self.v_resample_step, 0.0),
                 )
                 self.heightmap = None
                 self._status(f"Найдено контуров: {len(self.chains)}", "#a6e3a1")

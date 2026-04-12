@@ -4,7 +4,8 @@ import pytest
 import math
 from core.geometry import (
     simplify_chain, offset_chain, get_bounds, scale_chains,
-    sort_chains_nearest, insert_bridges, _chain_length
+    sort_chains_nearest, insert_bridges, _chain_length,
+    chaikin_smooth, resample_by_length,
 )
 
 
@@ -225,3 +226,75 @@ class TestInsertBridges:
         for seg, flag in result:
             assert isinstance(seg, list)
             assert isinstance(flag, bool)
+
+
+class TestChaikinSmooth:
+    """Тесты сглаживания Chaikin."""
+
+    def test_zero_passes_returns_original(self):
+        chain = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        result = chaikin_smooth(chain, 0)
+        assert result == chain
+
+    def test_short_chain_unchanged(self):
+        chain = [(0, 0), (1, 1)]
+        assert chaikin_smooth(chain, 3) == chain
+
+    def test_negative_passes_raises(self):
+        with pytest.raises(ValueError, match=">= 0"):
+            chaikin_smooth([(0, 0), (1, 0), (1, 1)], -1)
+
+    def test_closed_first_equals_last(self):
+        chain = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        result = chaikin_smooth(chain, 2, closed=True)
+        assert result[0] == result[-1]
+
+    def test_more_passes_more_points(self):
+        chain = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        r1 = chaikin_smooth(chain, 1)
+        r4 = chaikin_smooth(chain, 4)
+        assert len(r4) > len(r1)
+
+    def test_one_pass_doubles_inner_points(self):
+        # 4 уникальных точки + 1 закрывающая = 5 точек входа
+        # После 1 прохода: 4 * 2 = 8 + 1 закрывающая = 9
+        chain = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        result = chaikin_smooth(chain, 1, closed=True)
+        assert len(result) == 9
+
+
+class TestResampleByLength:
+    """Тесты ре-сэмплинга по длине дуги."""
+
+    def test_zero_step_raises(self):
+        with pytest.raises(ValueError, match="> 0"):
+            resample_by_length([(0, 0), (10, 0)], 0)
+
+    def test_negative_step_raises(self):
+        with pytest.raises(ValueError, match="> 0"):
+            resample_by_length([(0, 0), (10, 0)], -1)
+
+    def test_short_chain_returned(self):
+        chain = [(0, 0)]
+        assert resample_by_length(chain, 1.0) == chain
+
+    def test_closed_first_equals_last(self):
+        chain = [(0, 0), (10, 0), (10, 10), (0, 10), (0, 0)]
+        result = resample_by_length(chain, 3.0, closed=True)
+        assert result[0] == result[-1]
+
+    def test_spacing_approximately_equal(self):
+        chain = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+        step = 2.0
+        result = resample_by_length(chain, step, closed=True)
+        # Все внутренние интервалы должны равняться step
+        for i in range(len(result) - 2):
+            d = math.hypot(result[i + 1][0] - result[i][0],
+                           result[i + 1][1] - result[i][1])
+            assert d == pytest.approx(step, abs=1e-6)
+
+    def test_result_covers_full_perimeter(self):
+        # Квадрат со стороной 10, периметр = 40, шаг = 5 → ~8 отрезков
+        chain = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0), (0.0, 0.0)]
+        result = resample_by_length(chain, 5.0, closed=True)
+        assert len(result) >= 8 + 1  # +1 для закрывающей точки
