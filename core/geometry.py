@@ -37,11 +37,11 @@ def _rdp(points, epsilon):
 
 def simplify_chain(chain, epsilon):
     """Упрощает контур алгоритмом Рамера-Дугласа-Пекера.
-    
+
     Args:
         chain: Список точек [(x,y), ...]
         epsilon: Допуск упрощения
-    
+
     Returns:
         list: Упрощенный контур
     """
@@ -50,6 +50,107 @@ def simplify_chain(chain, epsilon):
     if epsilon <= 0 or len(chain) < 3:
         return chain
     return _rdp(chain, epsilon)
+
+
+# ─────────────────────────── Chaikin-сглаживание ────────────────────────────
+
+def chaikin_smooth(chain, passes, closed=True):
+    """Сглаживает контур алгоритмом Chaikin (итеративное срезание углов).
+
+    Каждый проход: Q = 0.75·P[i] + 0.25·P[i+1],  R = 0.25·P[i] + 0.75·P[i+1].
+    Сходится к B-сплайну 2-го порядка.
+
+    Рекомендации: 1–2 прохода — лёгкое сглаживание, 3–4 — оптимально,
+    5–6 — очень гладко (мелкие детали округляются).
+
+    Args:
+        chain: Список точек [(x,y), ...]. Может быть замкнутым (первая==последняя).
+        passes: Число проходов (0 = нет сглаживания).
+        closed: True если контур замкнутый.
+
+    Returns:
+        list: Сглаженный контур. Если closed=True, последняя точка == первой.
+
+    Raises:
+        ValueError: Если passes < 0.
+    """
+    if passes < 0:
+        raise ValueError(f"Число проходов должно быть >= 0, получено: {passes}")
+    if passes == 0 or len(chain) < 3:
+        return list(chain)
+    p = list(chain)
+    if closed and len(p) > 1:
+        x0, y0 = p[0]
+        xl, yl = p[-1]
+        if math.hypot(x0 - xl, y0 - yl) < 1e-9:
+            p = p[:-1]
+    for _ in range(passes):
+        n = len(p)
+        nxt = []
+        for j in range(n):
+            ax, ay = p[j]
+            bx, by = p[(j + 1) % n]
+            nxt.append((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by))
+            nxt.append((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by))
+        p = nxt
+    if closed:
+        p.append(p[0])
+    return p
+
+
+# ─────────────────────────── Ре-сэмплинг по длине дуги ─────────────────────
+
+def resample_by_length(chain, step_len, closed=True):
+    """Расставляет точки вдоль контура с равным шагом step_len.
+
+    Равномерный ре-сэмплинг: плотность G1-сегментов одинакова везде —
+    на прямых и на кривых. В отличие от RDP, который оставляет много точек
+    только в местах изломов.
+
+    Практический выбор: 0.5–1.5 пикс. для хорошего разрешения.
+
+    Args:
+        chain: Список точек [(x,y), ...]. Может быть замкнутым.
+        step_len: Расстояние между соседними точками (те же единицы, что и цепочка).
+        closed: True если контур замкнутый.
+
+    Returns:
+        list: Ре-сэмплированный контур.
+
+    Raises:
+        ValueError: Если step_len <= 0.
+    """
+    if step_len <= 0:
+        raise ValueError(f"Шаг ре-сэмплинга должен быть > 0, получено: {step_len}")
+    if len(chain) < 2:
+        return list(chain)
+    src = list(chain)
+    if closed and len(src) > 1:
+        x0, y0 = src[0]
+        xl, yl = src[-1]
+        if math.hypot(x0 - xl, y0 - yl) < 1e-9:
+            src = src[:-1]
+    if closed:
+        src = src + [src[0]]
+    result = [src[0]]
+    acc = 0.0
+    for i in range(1, len(src)):
+        dx = src[i][0] - src[i - 1][0]
+        dy = src[i][1] - src[i - 1][1]
+        seg_len = math.hypot(dx, dy)
+        if seg_len < 1e-9:
+            continue
+        traveled = 0.0
+        while acc + (seg_len - traveled) >= step_len:
+            move = step_len - acc
+            traveled += move
+            t = traveled / seg_len
+            result.append((src[i - 1][0] + t * dx, src[i - 1][1] + t * dy))
+            acc = 0.0
+        acc += seg_len - traveled
+    if closed:
+        result.append(result[0])
+    return result
 
 
 # ─────────────────────────── Офсет (tool compensation) ──────────────────────
