@@ -11,7 +11,7 @@ import logging
 
 from core.version import __version__, VERSION_DISPLAY
 
-from core.image import extract_contours, load_heightmap
+from core.image import extract_contours, extract_centerlines, load_heightmap
 from core.geometry import (
     simplify_chain, offset_chain, sort_chains_nearest,
     get_bounds, scale_chains,
@@ -41,6 +41,7 @@ class SettingsManager:
         "simplify_eps": "0", "threshold": "128", "blur_size": "3",
         "min_area": "10", "approx_factor": "0.001",
         "smooth_passes": "3", "resample_step": "0",
+        "centerline_mode": False,
         "invert": True, "bridge_mode": False, "bridge_size": "3.0", "bridge_count": "2",
         "stepover_pct": "40", "plunge_feed": "300", "blur_relief": "5",
         "strategy": "Зигзаг",
@@ -102,6 +103,9 @@ class CamApp(tk.Tk):
         self.heightmap = None
         self.gcode = ""
         self._template_active = False
+        self._chains_are_open = False   # True — контуры открыты (средняя линия)
+        self.viewer3d = None
+        self.view_mode = "2D"           # "2D" или "3D"
         self._updating_size = False
         self._size_debounce_id = None
         self._thresh_debounce_id = None
@@ -180,6 +184,14 @@ class CamApp(tk.Tk):
         self.cmb_mode.config(width=14)
         self.cmb_mode.pack(side=tk.LEFT, padx=(8, 0))
         self.v_mode.trace_add("write", self._on_mode_changed_trace)
+
+        # Чекбокс «Средняя линия» — генерация по скелету фигуры
+        # (одиночная линия по центру штриха). Доступен только в режиме «Контур».
+        self.v_centerline = tk.BooleanVar(value=False)
+        self.chk_centerline = ttk.Checkbutton(
+            frm_mode, text="Средняя линия", variable=self.v_centerline)
+        self.chk_centerline.pack(side=tk.LEFT, padx=(10, 0))
+        self.v_centerline.trace_add("write", self._on_centerline_changed)
 
         ttk.Separator(left, orient="horizontal").pack(fill=tk.X, pady=6)
 
@@ -382,6 +394,42 @@ class CamApp(tk.Tk):
         self.center_frame = ttk.LabelFrame(mid, text="Превью", padding=4)
         self.center_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=8)
 
+        # Панель переключения 2D/3D
+        view_bar = ttk.Frame(self.center_frame)
+        view_bar.pack(fill=tk.X, pady=(0, 4))
+
+        self.btn_view_2d = tk.Button(
+            view_bar, text="2D", width=4, command=self._switch_2d,
+            relief="flat", bd=0, bg="#89b4fa", fg="#1e1e2e",
+            activebackground="#74c7ec", font=("Segoe UI", 9, "bold"),
+            cursor="hand2")
+        self.btn_view_2d.pack(side=tk.LEFT, padx=(0, 2))
+        self.btn_view_3d = tk.Button(
+            view_bar, text="3D", width=4, command=self._switch_3d,
+            relief="flat", bd=0, bg="#313244", fg="#cdd6f4",
+            activebackground="#45475a", font=("Segoe UI", 9, "bold"),
+            cursor="hand2")
+        self.btn_view_3d.pack(side=tk.LEFT, padx=(0, 8))
+
+        # Кнопки ракурсов камеры (видны только в 3D)
+        self.frm_3d_views = ttk.Frame(view_bar)
+        for label, view in (("Сверху", "top"), ("Спереди", "front"),
+                            ("Сбоку", "side"), ("Изометрия", "iso")):
+            tk.Button(self.frm_3d_views, text=label,
+                      command=lambda v=view: self._set_3d_view(v),
+                      relief="flat", bd=0, bg="#313244", fg="#cdd6f4",
+                      activebackground="#45475a", font=("Segoe UI", 8),
+                      cursor="hand2").pack(side=tk.LEFT, padx=1)
+
+        # Ползунок анимации траектории (виден только в 3D)
+        self.v_anim = tk.DoubleVar(value=0)
+        self.scl_anim = tk.Scale(
+            view_bar, from_=0, to=100, orient="horizontal",
+            variable=self.v_anim, command=self._on_anim,
+            bg="#1e1e2e", fg="#89b4fa", troughcolor="#313244",
+            activebackground="#89b4fa", highlightthickness=0,
+            length=160, showvalue=True)
+
         self.canvas = tk.Canvas(self.center_frame, bg="#181825", width=420, height=420,
                                 highlightthickness=0)
         self.canvas.pack(fill=tk.BOTH, expand=True)
@@ -402,6 +450,7 @@ class CamApp(tk.Tk):
         self.txt_gcode.tag_configure("mcode",   foreground="#cba6f7")
         self.txt_gcode.tag_configure("comment", foreground="#6c7086")
         self.txt_gcode.tag_configure("gother",  foreground="#fab387")
+        self.txt_gcode.tag_configure("active_line", background="#45475a")
 
         # ── Статистика ──
         self.stats_frame = ttk.Frame(right, style="TFrame")
@@ -468,6 +517,7 @@ class CamApp(tk.Tk):
         self.v_approx.set(s.get("approx_factor", "0.001"))
         self.v_smooth_passes.set(s.get("smooth_passes", "3"))
         self.v_resample_step.set(s.get("resample_step", "0"))
+        self.v_centerline.set(s.get("centerline_mode", False))
         self.v_invert.set(s.get("invert", True))
         self.v_bridge.set(s.get("bridge_mode", False))
         self.v_bsize.set(s.get("bridge_size", "3.0"))
@@ -498,6 +548,7 @@ class CamApp(tk.Tk):
         for var in vars_to_save:
             var.trace_add("write", lambda *_: self._schedule_auto_save())
         self.v_invert.trace_add("write", lambda *_: self._schedule_auto_save())
+        self.v_centerline.trace_add("write", lambda *_: self._schedule_auto_save())
         self.v_bridge.trace_add("write", lambda *_: self._schedule_auto_save())
         self.v_lock.trace_add("write", lambda *_: self._schedule_auto_save())
         self.v_mode.trace_add("write", lambda *_: self._schedule_auto_save())
@@ -525,6 +576,7 @@ class CamApp(tk.Tk):
         s.set("approx_factor", self.v_approx.get())
         s.set("smooth_passes", self.v_smooth_passes.get())
         s.set("resample_step", self.v_resample_step.get())
+        s.set("centerline_mode", self.v_centerline.get())
         s.set("invert", self.v_invert.get())
         s.set("bridge_mode", self.v_bridge.get())
         s.set("bridge_size", self.v_bsize.get())
@@ -550,10 +602,12 @@ class CamApp(tk.Tk):
             self.frm_relief.pack_forget()
             self.frm_contour.pack(fill=tk.X, after=self.frm_common)
             self.btn_reload.config(text="Обновить контуры")
+            self.chk_centerline.config(state="normal")
         else:
             self.frm_contour.pack_forget()
             self.frm_relief.pack(fill=tk.X, after=self.frm_common)
             self.btn_reload.config(text="Обновить карту высот")
+            self.chk_centerline.config(state="disabled")
 
         if self.img_path:
             self._load_contours()
@@ -588,6 +642,7 @@ class CamApp(tk.Tk):
             h = h or 30.0
 
         self._template_active = True
+        self._chains_are_open = False
         self.img_path = None
         self.heightmap = None
         chains, iw, ih = generate_template(name, w, h)
@@ -602,9 +657,10 @@ class CamApp(tk.Tk):
         self.v_out_h.set(f"{h:.1f}")
         self._updating_size = False
 
-        cw = self.canvas.winfo_width() or 420
-        ch = self.canvas.winfo_height() or 420
-        draw_preview(self.canvas, self.chains, cw, ch)
+        if self.view_mode == "2D":
+            cw = self.canvas.winfo_width() or 420
+            ch = self.canvas.winfo_height() or 420
+            draw_preview(self.canvas, self.chains, cw, ch)
         self._status(f"Шаблон «{name}» загружен, контуров: {len(chains)}", "#a6e3a1")
 
     # ─── Живое превью бинаризации ───────────────────────────────────────
@@ -627,6 +683,8 @@ class CamApp(tk.Tk):
     def _update_binarization_preview(self):
         self._thresh_debounce_id = None
         if not self.img_path or self.v_mode.get() != "Контур":
+            return
+        if self.view_mode != "2D":
             return
         cw = self.canvas.winfo_width() or 420
         ch = self.canvas.winfo_height() or 420
@@ -817,24 +875,40 @@ class CamApp(tk.Tk):
             self.v_out_h.set(f"{self.img_h:.1f}")
             self._updating_size = False
 
-            w = self.canvas.winfo_width() or 420
-            h = self.canvas.winfo_height() or 420
-            draw_heightmap_preview(self.canvas, self.heightmap, w, h)
+            if self.view_mode == "2D":
+                w = self.canvas.winfo_width() or 420
+                h = self.canvas.winfo_height() or 420
+                draw_heightmap_preview(self.canvas, self.heightmap, w, h)
         else:
-            self._status("Извлечение контуров...", "#f9e2af")
+            centerline = self.v_centerline.get()
+            self._status("Извлечение средней линии..." if centerline
+                         else "Извлечение контуров...", "#f9e2af")
             try:
-                self.chains, self.img_w, self.img_h = extract_contours(
-                    self.img_path,
-                    threshold=self._int(self.v_thresh, 128),
-                    invert=self.v_invert.get(),
-                    blur_size=self._int(self.v_blur, 3),
-                    min_area=self._float(self.v_min_area, 10),
-                    epsilon_factor=self._float(self.v_approx, 0.001),
-                    smooth_passes=self._int(self.v_smooth_passes, 3),
-                    resample_step=self._float(self.v_resample_step, 0.0),
-                )
+                if centerline:
+                    self.chains, self.img_w, self.img_h = extract_centerlines(
+                        self.img_path,
+                        threshold=self._int(self.v_thresh, 128),
+                        invert=self.v_invert.get(),
+                        blur_size=self._int(self.v_blur, 3),
+                        smooth_passes=self._int(self.v_smooth_passes, 3),
+                        resample_step=self._float(self.v_resample_step, 0.0),
+                    )
+                    self._chains_are_open = True
+                else:
+                    self.chains, self.img_w, self.img_h = extract_contours(
+                        self.img_path,
+                        threshold=self._int(self.v_thresh, 128),
+                        invert=self.v_invert.get(),
+                        blur_size=self._int(self.v_blur, 3),
+                        min_area=self._float(self.v_min_area, 10),
+                        epsilon_factor=self._float(self.v_approx, 0.001),
+                        smooth_passes=self._int(self.v_smooth_passes, 3),
+                        resample_step=self._float(self.v_resample_step, 0.0),
+                    )
+                    self._chains_are_open = False
                 self.heightmap = None
-                self._status(f"Найдено контуров: {len(self.chains)}", "#a6e3a1")
+                noun = "линий" if centerline else "контуров"
+                self._status(f"Найдено {noun}: {len(self.chains)}", "#a6e3a1")
             except Exception as e:
                 self._status(f"Ошибка: {e}", "#f38ba8")
                 messagebox.showerror("Ошибка", str(e))
@@ -847,9 +921,10 @@ class CamApp(tk.Tk):
             self.v_out_h.set(f"{mx_y - mn_y:.1f}")
             self._updating_size = False
 
-            w = self.canvas.winfo_width() or 420
-            h = self.canvas.winfo_height() or 420
-            draw_preview(self.canvas, self.chains, w, h)
+            if self.view_mode == "2D":
+                w = self.canvas.winfo_width() or 420
+                h = self.canvas.winfo_height() or 420
+                draw_preview(self.canvas, self.chains, w, h)
 
     def _open_image(self):
         path = filedialog.askopenfilename(
@@ -917,6 +992,7 @@ class CamApp(tk.Tk):
             spindle_speed = self._int(self.v_spindle, 15000)
 
             self._set_progress(25)
+            centerline = self._chains_are_open
             gcode, dist_dict = chains_to_gcode(
                 chains=chains, tool_dia=tool_dia, feedrate=feedrate,
                 final_depth=self._float(self.v_depth, 2.0),
@@ -926,15 +1002,16 @@ class CamApp(tk.Tk):
                 simplify_eps=simplify_eps,
                 safe_z=self._float(self.v_safe, 5.0),
                 spindle_speed=spindle_speed,
+                centerline=centerline,
             )
-            
+
             self._set_progress(70)
             if tw or th:
                 mn_x, mn_y, mx_x, mx_y = get_bounds(chains)
                 ow, oh = mx_x - mn_x, mx_y - mn_y
                 gcode = f"; Output size: {ow:.2f} x {oh:.2f} mm\n" + gcode
 
-            offset = tool_dia / 2.0
+            offset = 0.0 if centerline else tool_dia / 2.0
             preview_chains = []
             for c in sort_chains_nearest(chains):
                 c = simplify_chain(c, simplify_eps)
@@ -965,9 +1042,13 @@ class CamApp(tk.Tk):
         self._set_progress(100)
         self.after(800, lambda: self._set_progress(0))
 
-        w = self.canvas.winfo_width() or 420
-        h = self.canvas.winfo_height() or 420
-        draw_preview(self.canvas, preview_chains, w, h)
+        if self.view_mode == "3D" and self.viewer3d is not None:
+            self.viewer3d.load_gcode(self.gcode)
+            self.v_anim.set(0)
+        else:
+            w = self.canvas.winfo_width() or 420
+            h = self.canvas.winfo_height() or 420
+            draw_preview(self.canvas, preview_chains, w, h)
 
     def _generate_relief(self):
         if self.heightmap is None:
@@ -1024,9 +1105,84 @@ class CamApp(tk.Tk):
         self._set_progress(100)
         self.after(800, lambda: self._set_progress(0))
 
+        if self.view_mode == "3D" and self.viewer3d is not None:
+            self.viewer3d.load_gcode(self.gcode)
+            self.v_anim.set(0)
+        else:
+            w = self.canvas.winfo_width() or 420
+            h = self.canvas.winfo_height() or 420
+            draw_heightmap_preview(self.canvas, self.heightmap, w, h)
+
+    # ─── 2D / 3D просмотр и средняя линия ───────────────────────────────
+
+    def _on_centerline_changed(self, *_):
+        if self.img_path and self.v_mode.get() == "Контур":
+            self._load_contours()
+
+    def _switch_2d(self):
+        self.view_mode = "2D"
+        self.btn_view_2d.config(bg="#89b4fa", fg="#1e1e2e")
+        self.btn_view_3d.config(bg="#313244", fg="#cdd6f4")
+        self.frm_3d_views.pack_forget()
+        self.scl_anim.pack_forget()
+        if self.viewer3d is not None:
+            self.viewer3d.dispose()
+            self.viewer3d = None
+        self.txt_gcode.tag_remove("active_line", "1.0", tk.END)
+        self._redraw_2d()
+
+    def _switch_3d(self):
+        if not self.gcode:
+            messagebox.showinfo("Нет данных", "Сначала сгенерируйте G-Code.")
+            return
+        self.view_mode = "3D"
+        self.btn_view_3d.config(bg="#89b4fa", fg="#1e1e2e")
+        self.btn_view_2d.config(bg="#313244", fg="#cdd6f4")
+        self.frm_3d_views.pack(side=tk.LEFT, padx=(0, 8))
+        self.scl_anim.pack(side=tk.LEFT)
+        if self.viewer3d is None:
+            from ui.viewer3d import GCodeViewer3D
+            self.viewer3d = GCodeViewer3D(self.canvas)
+            self.viewer3d.on_line_change = self._highlight_gcode_line
+        self.viewer3d.load_gcode(self.gcode)
+        self.v_anim.set(0)
+
+    def _set_3d_view(self, view):
+        if self.viewer3d is not None:
+            self.viewer3d.set_view(view)
+
+    def _on_anim(self, _value):
+        if self.viewer3d is not None:
+            self.viewer3d.set_animation_progress(self.v_anim.get())
+
+    def _highlight_gcode_line(self, line_no):
+        self.txt_gcode.tag_remove("active_line", "1.0", tk.END)
+        if not line_no:
+            return
+        try:
+            self.txt_gcode.tag_add("active_line",
+                                   f"{line_no}.0", f"{line_no}.end")
+            self.txt_gcode.see(f"{line_no}.0")
+        except tk.TclError:
+            pass
+
+    def _redraw_2d(self):
         w = self.canvas.winfo_width() or 420
         h = self.canvas.winfo_height() or 420
-        draw_heightmap_preview(self.canvas, self.heightmap, w, h)
+        self.canvas.configure(bg="#181825")
+        if self.v_mode.get() == "Рельеф" and self.heightmap is not None:
+            draw_heightmap_preview(self.canvas, self.heightmap, w, h)
+        elif self.chains:
+            draw_preview(self.canvas, self.chains, w, h)
+        else:
+            self.canvas.delete("all")
+
+    def _handle_canvas_resize(self):
+        """Перерисовка превью при изменении размера окна (2D или 3D)."""
+        if self.view_mode == "3D" and self.viewer3d is not None:
+            self.viewer3d.render()
+        else:
+            self._redraw_2d()
 
     # ─── Сохранение ──────────────────────────────────────────────────────
 

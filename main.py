@@ -71,14 +71,7 @@ def main():
 
         def on_resize(event):
             try:
-                w = app.canvas.winfo_width()
-                h = app.canvas.winfo_height()
-                if app.v_mode.get() == "Рельеф" and app.heightmap is not None:
-                    from ui.preview import draw_heightmap_preview
-                    draw_heightmap_preview(app.canvas, app.heightmap, w, h)
-                elif app.chains:
-                    from ui.preview import draw_preview
-                    draw_preview(app.canvas, app.chains, w, h)
+                app._handle_canvas_resize()
             except Exception as e:
                 logger.error(f"Ошибка при отрисовке превью: {e}")
         
