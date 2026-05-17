@@ -8,6 +8,7 @@
 
 ---
  ![Главный интерфейс](Screenshot/main.png)
+ ![Предпросмотр](Screenshot/view.png)
 
 ## Описание
 
