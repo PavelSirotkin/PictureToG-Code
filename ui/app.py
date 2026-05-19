@@ -436,7 +436,7 @@ class CamApp(tk.Tk):
 
         # ── Правая панель — G-Code ──
         right = ttk.LabelFrame(mid, text="G-Code", padding=4)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        right.pack(side=tk.LEFT, fill=tk.BOTH)
 
         self.txt_gcode = scrolledtext.ScrolledText(
             right, width=42, bg="#181825", fg="#cdd6f4",
@@ -1139,7 +1139,7 @@ class CamApp(tk.Tk):
         self.btn_view_3d.config(bg="#89b4fa", fg="#1e1e2e")
         self.btn_view_2d.config(bg="#313244", fg="#cdd6f4")
         self.frm_3d_views.pack(side=tk.LEFT, padx=(0, 8))
-        self.scl_anim.pack(side=tk.LEFT)
+        self.scl_anim.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
         if self.viewer3d is None:
             from ui.viewer3d import GCodeViewer3D
             self.viewer3d = GCodeViewer3D(self.canvas)
