@@ -7,7 +7,11 @@
 ![Лицензия](https://img.shields.io/badge/license-free-green.svg)
 
 ---
+## Главный интерфейс
  ![Главный интерфейс](Screenshot/main.png)
+ ![Предпросмотр](Screenshot/view.png)
+
+## 3D предпросмотр
  ![Предпросмотр](Screenshot/view.png)
 
 ## Описание

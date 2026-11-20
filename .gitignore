@@ -31,6 +31,7 @@ desktop.ini
 error.log
 *.exe
 PictureToG-Code.exe
+*.spec
 
 # Settings (auto-generated)
 settings.json

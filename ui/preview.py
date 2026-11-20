@@ -22,9 +22,14 @@ def draw_preview(canvas, chains, width=400, height=400):
     span_y = max_y - min_y or 1
     scale = min((width - 2 * margin) / span_x, (height - 2 * margin) / span_y)
 
+    draw_w = span_x * scale
+    draw_h = span_y * scale
+    off_x = (width - draw_w) / 2
+    off_y = (height - draw_h) / 2
+
     def to_canvas(x, y):
-        cx = margin + (x - min_x) * scale
-        cy = height - margin - (y - min_y) * scale
+        cx = off_x + (x - min_x) * scale
+        cy = height - off_y - (y - min_y) * scale
         return cx, cy
 
     colors = ["#00aaff", "#ff6600", "#00cc66", "#ff00aa", "#ffcc00"]
