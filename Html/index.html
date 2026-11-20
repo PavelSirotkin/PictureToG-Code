@@ -10,7 +10,7 @@
     <div class="app-container">
         <!-- Header -->
         <header class="app-header">
-            <h1>PictureToG-Code <span class="version">V 0.9.1 (Web)</span></h1>
+            <h1>PictureToG-Code <span class="version">V 1.1 (Web)</span></h1>
             <p class="subtitle">Генератор G-кода из растровых изображений для ЧПУ станков</p>
         </header>
 
@@ -41,6 +41,11 @@
                             <span class="radio-text">Рельеф</span>
                         </label>
                     </div>
+                    <label class="mode-checkbox" id="centerlineModeLabel"
+                           title="Генерировать G-код по средней линии (скелету) фигуры вместо обводки контура. Доступно только в режиме «Контур».">
+                        <input type="checkbox" id="centerlineMode">
+                        <span>Средняя линия</span>
+                    </label>
                 </section>
 
                 <!-- Template Selection -->
@@ -216,10 +221,27 @@
             <main class="preview-panel">
                 <div class="preview-header">
                     <h3>Предпросмотр</h3>
+                    <div class="preview-controls">
+                        <div class="view-toggle">
+                            <button id="btn2DView" class="btn-view active">2D</button>
+                            <button id="btn3DView" class="btn-view">3D</button>
+                        </div>
+                        <div id="view3DButtons" class="view-3d-buttons hidden">
+                            <button class="btn-small" data-view="top">Сверху</button>
+                            <button class="btn-small" data-view="front">Спереди</button>
+                            <button class="btn-small" data-view="side">Сбоку</button>
+                            <button class="btn-small" data-view="iso">Изометрия</button>
+                        </div>
+                        <div id="animationControls" class="animation-controls hidden">
+                            <input type="range" id="animationSlider" class="animation-slider" min="0" max="100" value="0">
+                            <span id="animationProgress" class="animation-progress">0%</span>
+                        </div>
+                    </div>
                     <span id="previewInfo" class="preview-info"></span>
                 </div>
                 <div class="preview-container">
                     <canvas id="previewCanvas"></canvas>
+                    <div id="viewer3DContainer" class="viewer-3d-container hidden"></div>
                     <div id="previewPlaceholder" class="preview-placeholder">
                         <div class="placeholder-icon">🖼️</div>
                         <p>Загрузите изображение для начала работы</p>
@@ -269,11 +291,16 @@
         </div>
     </div>
 
+    <!-- Three.js библиотека (UMD версия для совместимости) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    
     <script src="js/image.js"></script>
     <script src="js/geometry.js"></script>
     <script src="js/gcode.js"></script>
     <script src="js/templates.js"></script>
     <script src="js/preview.js"></script>
+    <script src="js/viewer3d.js"></script>
     <script src="js/app.js"></script>
 </body>
 </html>

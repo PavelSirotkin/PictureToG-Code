@@ -30,13 +30,14 @@ desktop.ini
 *.log
 error.log
 *.exe
-PictureToG-Code_V*.exe
+PictureToG-Code.exe
 
 # Settings (auto-generated)
 settings.json
 
-# Qwen IDE
+# IDE
 .qwen/
+.claude/
 
 # Test coverage
 htmlcov/

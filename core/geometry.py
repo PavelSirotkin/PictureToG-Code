@@ -86,12 +86,24 @@ def chaikin_smooth(chain, passes, closed=True):
             p = p[:-1]
     for _ in range(passes):
         n = len(p)
+        if n < 2:
+            break
         nxt = []
-        for j in range(n):
-            ax, ay = p[j]
-            bx, by = p[(j + 1) % n]
-            nxt.append((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by))
-            nxt.append((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by))
+        if closed:
+            for j in range(n):
+                ax, ay = p[j]
+                bx, by = p[(j + 1) % n]
+                nxt.append((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by))
+                nxt.append((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by))
+        else:
+            # Открытая полилиния: концы остаются неподвижными
+            nxt.append(p[0])
+            for j in range(n - 1):
+                ax, ay = p[j]
+                bx, by = p[j + 1]
+                nxt.append((0.75 * ax + 0.25 * bx, 0.75 * ay + 0.25 * by))
+                nxt.append((0.25 * ax + 0.75 * bx, 0.25 * ay + 0.75 * by))
+            nxt.append(p[-1])
         p = nxt
     if closed:
         p.append(p[0])
@@ -150,6 +162,12 @@ def resample_by_length(chain, step_len, closed=True):
         acc += seg_len - traveled
     if closed:
         result.append(result[0])
+    else:
+        # Для открытой полилинии гарантируем сохранение конечной точки
+        lx, ly = src[-1]
+        rx, ry = result[-1]
+        if math.hypot(lx - rx, ly - ry) > 1e-6:
+            result.append((lx, ly))
     return result
 
 

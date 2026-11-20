@@ -13,10 +13,11 @@ class PreviewRenderer {
      * Отрисовка контуров на canvas
      * @param {HTMLCanvasElement} canvas 
      * @param {Array<Array<[number, number]>>} chains 
-     * @param {number} canvasW 
-     * @param {number} canvasH 
+     * @param {number} canvasW
+     * @param {number} canvasH
+     * @param {boolean} closed  — true: замкнутые контуры (заливка); false: открытые линии
      */
-    static drawContours(canvas, chains, canvasW, canvasH) {
+    static drawContours(canvas, chains, canvasW, canvasH, closed = true) {
         const ctx = canvas.getContext('2d');
         canvas.width = canvasW;
         canvas.height = canvasH;
@@ -66,8 +67,10 @@ class PreviewRenderer {
                     ctx.lineTo(x, y);
                 }
             }
-            ctx.closePath();
-            ctx.fill();
+            if (closed) {
+                ctx.closePath();
+                ctx.fill();
+            }
             ctx.stroke();
         }
         

@@ -16,6 +16,9 @@ class PictureToGCodeApp {
         this.aspectLocked = true;
         this.lastAspectW = 0;
         this.lastAspectH = 0;
+        this.viewer3D = null;
+        this.current3DView = '2D'; // '2D' или '3D'
+        this.chainsAreOpen = false; // true — контуры открыты (режим «средняя линия»)
 
         // DOM элементы
         this.elements = {};
@@ -23,6 +26,7 @@ class PictureToGCodeApp {
         this._initElements();
         this._bindEvents();
         this._loadSettings();
+        this._updateCenterlineAvailability();
         this._updatePreviewSize();
     }
 
@@ -38,6 +42,8 @@ class PictureToGCodeApp {
 
             // Режим
             modeRadios: document.querySelectorAll('input[name="mode"]'),
+            centerlineMode: document.getElementById('centerlineMode'),
+            centerlineModeLabel: document.getElementById('centerlineModeLabel'),
 
             // Шаблоны
             templateSelect: document.getElementById('templateSelect'),
@@ -104,6 +110,17 @@ class PictureToGCodeApp {
             // Загрузка
             loadingOverlay: document.getElementById('loadingOverlay'),
             loadingText: document.getElementById('loadingText'),
+
+            // 3D Viewer
+            btn2DView: document.getElementById('btn2DView'),
+            btn3DView: document.getElementById('btn3DView'),
+            viewer3DContainer: document.getElementById('viewer3DContainer'),
+            view3DButtons: document.getElementById('view3DButtons'),
+            
+            // Animation controls
+            animationControls: document.getElementById('animationControls'),
+            animationSlider: document.getElementById('animationSlider'),
+            animationProgress: document.getElementById('animationProgress'),
         };
     }
 
@@ -165,6 +182,28 @@ class PictureToGCodeApp {
             resizeObserver.observe(previewContainer);
         }
 
+        // 3D View переключатели
+        this.elements.btn2DView.addEventListener('click', () => this._switch2DView());
+        this.elements.btn3DView.addEventListener('click', () => this._switch3DView());
+
+        // 3D View кнопки камеры
+        this.elements.view3DButtons.querySelectorAll('[data-view]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                if (this.viewer3D) {
+                    this.viewer3D.setView(e.target.dataset.view);
+                }
+            });
+        });
+
+        // Animation controls - ползунок
+        this.elements.animationSlider.addEventListener('input', (e) => {
+            if (this.viewer3D) {
+                const progress = parseFloat(e.target.value);
+                this.viewer3D.setAnimationProgress(progress);
+                this.elements.animationProgress.textContent = Math.round(progress) + '%';
+            }
+        });
+
         // Автосохранение при изменении параметров
         const allInputs = document.querySelectorAll('input, select, textarea');
         allInputs.forEach(input => {
@@ -186,6 +225,7 @@ class PictureToGCodeApp {
 
             // Сбрасываем предыдущие результаты
             this.chains = [];
+            this.chainsAreOpen = false;
             this.heightmap = null;
             this.currentGCode = '';
             this.currentDistDict = null;
@@ -231,7 +271,18 @@ class PictureToGCodeApp {
             el.reliefParams.classList.remove('hidden');
         }
 
+        this._updateCenterlineAvailability();
         this._redrawPreview();
+    }
+
+    /**
+     * Чекбокс «Средняя линия» активен только в режиме «Контур»
+     */
+    _updateCenterlineAvailability() {
+        const el = this.elements;
+        const isContour = this._getMode() === 'Контур';
+        el.centerlineMode.disabled = !isContour;
+        el.centerlineModeLabel.classList.toggle('disabled', !isContour);
     }
 
     /**
@@ -297,15 +348,17 @@ class PictureToGCodeApp {
         const mode = this._getMode();
 
         if (this.chains.length > 0 && mode === 'Контур') {
-            PreviewRenderer.drawContours(canvas, this.chains, w, h);
-            this.elements.previewInfo.textContent = `Контуров: ${this.chains.length}`;
+            PreviewRenderer.drawContours(canvas, this.chains, w, h, !this.chainsAreOpen);
+            this.elements.previewInfo.textContent = this.chainsAreOpen
+                ? `Линий: ${this.chains.length}`
+                : `Контуров: ${this.chains.length}`;
         } else if (this.heightmap && mode === 'Рельеф') {
             PreviewRenderer.drawHeightmap(
                 canvas, this.heightmap, 
                 this.imageProcessor.width, this.imageProcessor.height, 
                 w, h
             );
-            this.elements.previewInfo.textContent = `Карта высот`;
+            this.elements.previewInfo.textContent = '';
         } else if (this.imageProcessor.originalImage) {
             PreviewRenderer.drawImage(
                 canvas, 
@@ -383,6 +436,10 @@ class PictureToGCodeApp {
     _generateContourGCode() {
         const el = this.elements;
         let chains;
+        let isCenterline = false;
+
+        // «Средняя линия» доступна только в режиме «Контур» и только для изображения
+        const centerlineRequested = el.centerlineMode.checked && !el.centerlineMode.disabled;
 
         // Если шаблон — используем его
         const templateName = el.templateSelect.value;
@@ -403,30 +460,47 @@ class PictureToGCodeApp {
             let data = this.imageProcessor.grayscaleData;
             if (blurSize > 0) {
                 data = this.imageProcessor.gaussianBlur(
-                    data, 
-                    this.imageProcessor.width, 
-                    this.imageProcessor.height, 
+                    data,
+                    this.imageProcessor.width,
+                    this.imageProcessor.height,
                     blurSize
                 );
             }
 
             const binary = this.imageProcessor.threshold(data, threshold, invert);
 
-            // Извлечение контуров
             const smoothPasses = parseInt(el.smoothPasses.value) || 0;
             const resampleStep = parseFloat(el.resampleStep.value) || 0;
-            chains = this.imageProcessor.extractContours(
-                binary,
-                this.imageProcessor.width,
-                this.imageProcessor.height,
-                minArea,
-                approxFactor,
-                smoothPasses,
-                resampleStep
-            );
 
-            if (chains.length === 0) {
-                throw new Error('Не найдено контуров. Попробуйте изменить порог бинаризации.');
+            if (centerlineRequested) {
+                // Режим «средняя линия» — скелет фигуры (одиночная линия по центру)
+                isCenterline = true;
+                chains = this.imageProcessor.extractCenterlines(
+                    binary,
+                    this.imageProcessor.width,
+                    this.imageProcessor.height,
+                    smoothPasses,
+                    resampleStep
+                );
+
+                if (chains.length === 0) {
+                    throw new Error('Не найдено линий. Попробуйте изменить порог бинаризации.');
+                }
+            } else {
+                // Обычный контур — обводка фигуры
+                chains = this.imageProcessor.extractContours(
+                    binary,
+                    this.imageProcessor.width,
+                    this.imageProcessor.height,
+                    minArea,
+                    approxFactor,
+                    smoothPasses,
+                    resampleStep
+                );
+
+                if (chains.length === 0) {
+                    throw new Error('Не найдено контуров. Попробуйте изменить порог бинаризации.');
+                }
             }
         }
 
@@ -436,6 +510,7 @@ class PictureToGCodeApp {
         chains = Geometry.scaleChains(chains, outW, outH, this.aspectLocked);
 
         this.chains = chains;
+        this.chainsAreOpen = isCenterline;
 
         // Параметры для контурной резки (один проход)
         const params = {
@@ -445,6 +520,7 @@ class PictureToGCodeApp {
             simplifyEps: parseFloat(el.simplifyEps.value),
             safeZ: parseFloat(el.safeZ.value),
             spindleSpeed: parseFloat(el.spindleSpeed.value),
+            centerline: isCenterline,
         };
 
         // Генерация
@@ -530,6 +606,11 @@ class PictureToGCodeApp {
             </div>
         `;
         this.elements.statsContent.style.display = 'block';
+
+        // Обновляем 3D визуализацию если она активна
+        if (this.current3DView === '3D' && this.viewer3D) {
+            this.viewer3D.loadGCode(gcode);
+        }
     }
 
     /**
@@ -541,7 +622,17 @@ class PictureToGCodeApp {
             return;
         }
 
-        const blob = new Blob([this.currentGCode], { type: 'text/plain' });
+        // TurboCNC and other DOS controllers require ASCII text with CRLF line endings.
+        // Comments may contain Unicode, so omit them without changing machine commands.
+        const dosGCode = this.currentGCode.split(/\r\n|\r|\n/)
+            .map(line => line.split(';', 1)[0].trim())
+            .filter(line => line.length > 0)
+            .join('\r\n') + '\r\n';
+        if (/[^\x00-\x7F]/.test(dosGCode)) {
+            alert('G-код содержит символы вне ASCII. Проверьте команды перед сохранением.');
+            return;
+        }
+        const blob = new Blob([dosGCode], { type: 'text/plain;charset=us-ascii' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
@@ -631,6 +722,7 @@ class PictureToGCodeApp {
             bridgeCount: el.bridgeCount.value,
             smoothPasses: el.smoothPasses.value,
             resampleStep: el.resampleStep.value,
+            centerlineMode: el.centerlineMode.checked,
             stepoverPct: el.stepoverPct.value,
             plungeFeed: el.plungeFeed.value,
             blurRelief: el.blurRelief.value,
@@ -686,6 +778,7 @@ class PictureToGCodeApp {
         if (settings.bridgeCount) el.bridgeCount.value = settings.bridgeCount;
         if (settings.smoothPasses !== undefined) el.smoothPasses.value = settings.smoothPasses;
         if (settings.resampleStep !== undefined) el.resampleStep.value = settings.resampleStep;
+        if (settings.centerlineMode !== undefined) el.centerlineMode.checked = settings.centerlineMode;
         if (settings.stepoverPct) el.stepoverPct.value = settings.stepoverPct;
         if (settings.plungeFeed) el.plungeFeed.value = settings.plungeFeed;
         if (settings.blurRelief) el.blurRelief.value = settings.blurRelief;
@@ -705,6 +798,84 @@ class PictureToGCodeApp {
                 radio.checked = true;
                 this._handleModeChange({ target: radio });
             }
+        }
+    }
+
+    /**
+     * Переключение на 2D вид
+     */
+    _switch2DView() {
+        this.current3DView = '2D';
+        this.elements.btn2DView.classList.add('active');
+        this.elements.btn3DView.classList.remove('active');
+        this.elements.previewCanvas.classList.remove('hidden');
+        this.elements.viewer3DContainer.classList.add('hidden');
+        this.elements.view3DButtons.classList.add('hidden');
+        this.elements.animationControls.classList.add('hidden');
+
+        // Очищаем 3D viewer
+        if (this.viewer3D) {
+            this.viewer3D.dispose();
+            this.viewer3D = null;
+        }
+
+        this._redrawPreview();
+    }
+
+    /**
+     * Переключение на 3D вид
+     */
+    _switch3DView() {
+        if (!this.currentGCode) {
+            alert('Сначала сгенерируйте G-код');
+            return;
+        }
+
+        this.current3DView = '3D';
+        this.elements.btn2DView.classList.remove('active');
+        this.elements.btn3DView.classList.add('active');
+        this.elements.previewCanvas.classList.add('hidden');
+        this.elements.viewer3DContainer.classList.remove('hidden');
+        this.elements.view3DButtons.classList.remove('hidden');
+        this.elements.animationControls.classList.remove('hidden');
+
+        // Инициализируем 3D viewer
+        if (!this.viewer3D) {
+            this.viewer3D = new GCodeViewer3D(this.elements.viewer3DContainer);
+            
+            // Устанавливаем callback для подсветки строк G-кода
+            this.viewer3D.onLineChange = (lineIndex) => {
+                this._highlightGCodeLine(lineIndex);
+            };
+        }
+
+        // Загружаем G-код
+        this.viewer3D.loadGCode(this.currentGCode);
+        
+        // Сбрасываем анимацию
+        this.elements.animationSlider.value = 0;
+        this.elements.animationProgress.textContent = '0%';
+    }
+
+    /**
+     * Подсветка строки G-кода
+     */
+    _highlightGCodeLine(lineIndex) {
+        const gcodeOutput = this.elements.gcodeOutput;
+        const lines = gcodeOutput.querySelectorAll('.gcode-line');
+        
+        // Убираем предыдущую подсветку
+        lines.forEach(line => line.classList.remove('gcode-line-active'));
+        
+        // Подсвечиваем текущую строку
+        if (lines[lineIndex]) {
+            lines[lineIndex].classList.add('gcode-line-active');
+            
+            // Прокручиваем к текущей строке
+            lines[lineIndex].scrollIntoView({ 
+                behavior: 'smooth', 
+                block: 'center' 
+            });
         }
     }
 }
