@@ -34,8 +34,14 @@ class GCodeGenerator {
             toolDia, feedrate, finalDepth,
             simplifyEps,
             safeZ = 5.0, spindleSpeed = 15000,
-            centerline = false,
+            centerline = false, numPasses = 1,
+            bridgeMode = false, bridgeSize = 3, bridgeCount = 2,
         } = params;
+        if (!Number.isFinite(toolDia) || toolDia <= 0 || !Number.isFinite(feedrate) || feedrate <= 0 ||
+            !Number.isFinite(finalDepth) || finalDepth <= 0 || !Number.isFinite(safeZ) || safeZ <= 0 ||
+            !Number.isFinite(spindleSpeed) || spindleSpeed < 0 || !Number.isFinite(simplifyEps) || simplifyEps < 0 ||
+            !Number.isInteger(numPasses) || numPasses < 1 || numPasses > 1000)
+            throw new Error('Проверьте параметры инструмента, подачи, глубины, высоты и числа проходов.');
 
         // Средняя линия: фреза идёт точно по линии — компенсация радиуса не нужна.
         // Контур: смещаем на радиус фрезы внутрь (обводка).
@@ -67,46 +73,38 @@ class GCodeGenerator {
         // Упрощение (если задан simplifyEps — дополнительный RDP поверх уже сглаженного)
         chains = chains.map(chain => Geometry.simplifyChain(chain, simplifyEps));
 
-        // Офсет (компенсация радиуса фрезы)
-        let offsetChains = [];
-        for (const chain of chains) {
-            if (chain.length < 2) continue;
-            offsetChains.push(...Geometry.offsetChain(chain, -offset));
-        }
-
-        // Сортировка — минимизируем холостой ход
+        // Средняя линия не имеет стороны обработки и не компенсируется.
+        let offsetChains = centerline ? chains : Geometry.offsetContours(chains, offset);
         offsetChains = Geometry.sortChainsNearest(offsetChains);
+        if (!offsetChains.length) throw new Error('Нет контуров для обработки.');
 
         for (const oc of offsetChains) {
             if (oc.length < 2) continue;
-
             const [x0, y0] = oc[0];
-            const zVal = -finalDepth;
-            const fVal = feedrate;
-
-            // Подъём
-            lines.push(`G0 Z${safeZ.toFixed(3)}`);
-            rapidDist += Math.abs(safeZ - curZ);
-            curZ = safeZ;
-
-            // Переезд к началу контура
-            lines.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}`);
-            rapidDist += Math.hypot(x0 - curX, y0 - curY);
-            curX = x0; curY = y0;
-
-            // Врезание
-            lines.push(`G1 Z${zVal.toFixed(3)} F${fVal.toFixed(1)}`);
-            feedDist += Math.abs(zVal - curZ);
-            curZ = zVal;
-
-            // Обход контура — только XY, F не повторяем
-            for (let i = 1; i < oc.length; i++) {
-                const nx = oc[i][0], ny = oc[i][1];
-                const d = Math.hypot(nx - curX, ny - curY);
-                if (d < 0.001) continue; // пропускаем дубликаты
-                feedDist += d;
-                lines.push(`G1 X${nx.toFixed(3)} Y${ny.toFixed(3)}`);
-                curX = nx; curY = ny;
+            for (let pass = 1; pass <= numPasses; pass++) {
+                const zVal = -finalDepth * pass / numPasses;
+                const segments = !centerline && bridgeMode && pass === numPasses
+                    ? Geometry.insertBridges(oc, bridgeSize, bridgeCount)
+                    : [{segment: oc, isBridge: false}];
+                lines.push(`G0 Z${safeZ.toFixed(3)}`);
+                rapidDist += Math.abs(safeZ - curZ); curZ = safeZ;
+                lines.push(`G0 X${x0.toFixed(3)} Y${y0.toFixed(3)}`);
+                rapidDist += Math.hypot(x0 - curX, y0 - curY); curX = x0; curY = y0;
+                lines.push(`G1 Z${zVal.toFixed(3)} F${feedrate.toFixed(1)}`);
+                feedDist += Math.abs(zVal - curZ); curZ = zVal;
+                for (const {segment, isBridge} of segments) {
+                    const nextZ = isBridge ? 0 : zVal;
+                    if (Math.abs(nextZ - curZ) > 0.00001) {
+                        lines.push(`G1 Z${nextZ.toFixed(3)}`);
+                        feedDist += Math.abs(nextZ - curZ); curZ = nextZ;
+                    }
+                    for (const [nx, ny] of segment.slice(1)) {
+                        const d = Math.hypot(nx - curX, ny - curY);
+                        if (d < 0.00001) continue;
+                        lines.push(`G1 X${nx.toFixed(3)} Y${ny.toFixed(3)}`);
+                        feedDist += d; curX = nx; curY = ny;
+                    }
+                }
             }
         }
 

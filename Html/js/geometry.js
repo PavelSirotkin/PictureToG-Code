@@ -65,44 +65,42 @@ class Geometry {
         return [start, end];
     }
 
-    /**
-     * Смещает контур на указанное расстояние (компенсация инструмента)
-     * Упрощённая реализация без Shapely — просто масштабируем контур от центра
-     * @param {Array<[number, number]>} chain 
-     * @param {number} offset 
-     * @returns {Array<Array<[number, number]>>}
+    /** Erode the filled contour region: outer boundaries inward, holes outward.
+     * Integer coordinates use 0.001 mm; round joins approximate arcs to 0.005 mm.
+     * Reject topology changes so an inaccessible feature is never silently omitted.
      */
-    static offsetChain(chain, offset) {
-        if (offset === 0 || chain.length < 3) return [chain];
-        
-        // Упрощённый офсет: находим центр и масштабируем
-        // Это НЕ точный офсет как у Shapely, но работает для простых контуров
-        const center = Geometry._centroid(chain);
-        
-        const result = chain.map(([x, y]) => {
-            const dx = x - center[0];
-            const dy = y - center[1];
-            const dist = Math.hypot(dx, dy);
-            if (dist === 0) return [x, y];
-            
-            const scale = (dist + offset) / dist;
-            return [center[0] + dx * scale, center[1] + dy * scale];
+    static offsetContours(chains, radius) {
+        if (!Number.isFinite(radius) || radius <= 0) throw new Error('Диаметр фрезы должен быть положительным.');
+        if (typeof ClipperLib === 'undefined') throw new Error('Не загружена библиотека компенсации фрезы.');
+        const scale = 1000;
+        const paths = chains.map((chain, i) => {
+            if (chain.length < 4 || Math.hypot(chain[0][0] - chain.at(-1)[0], chain[0][1] - chain.at(-1)[1]) > 0.002)
+                throw new Error(`Контур ${i + 1} не замкнут. Проверьте изображение или используйте среднюю линию.`);
+            const path = chain.slice(0, -1).map(([x,y]) => {
+                if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x * scale) > 1e9 || Math.abs(y * scale) > 1e9)
+                    throw new Error('Недопустимые координаты контура.');
+                return {X: Math.round(x * scale), Y: Math.round(y * scale)};
+            });
+            if (path.length < 3 || Math.abs(ClipperLib.Clipper.Area(path)) < 1) throw new Error(`Контур ${i + 1} имеет нулевую площадь.`);
+            return path;
         });
-        
-        return [result];
-    }
-
-    /**
-     * Вычисление центроида полигона
-     */
-    static _centroid(points) {
-        let cx = 0, cy = 0;
-        const n = points.length;
-        for (const [x, y] of points) {
-            cx += x;
-            cy += y;
-        }
-        return [cx / n, cy / n];
+        const clipper = new ClipperLib.Clipper();
+        clipper.StrictlySimple = true;
+        clipper.AddPaths(paths, ClipperLib.PolyType.ptSubject, true);
+        const normalized = new ClipperLib.Paths();
+        if (!clipper.Execute(ClipperLib.ClipType.ctUnion, normalized, ClipperLib.PolyFillType.pftEvenOdd, ClipperLib.PolyFillType.pftEvenOdd) || normalized.length !== paths.length)
+            throw new Error('Контуры пересекаются, касаются или имеют неоднозначную вложенность. Исправьте изображение.');
+        const offset = new ClipperLib.ClipperOffset(2, 5);
+        offset.AddPaths(normalized, ClipperLib.JoinType.jtRound, ClipperLib.EndType.etClosedPolygon);
+        const result = new ClipperLib.Paths();
+        offset.Execute(result, -radius * scale);
+        if (result.length !== normalized.length)
+            throw new Error('После компенсации контур исчез, разделился или соединился с другим. Уменьшите диаметр фрезы.');
+        return result.map(path => {
+            const points = path.map(p => [p.X / scale, p.Y / scale]);
+            points.push([...points[0]]);
+            return points;
+        });
     }
 
     /**
@@ -216,66 +214,33 @@ class Geometry {
      * @returns {Array<{segment: Array<[number, number]>, isBridge: boolean}>}
      */
     static insertBridges(chain, bridgeSize, numBridges = 2) {
-        if (chain.length < 2) return [{ segment: chain, isBridge: false }];
-        
         const total = Geometry.chainLength(chain);
-        if (total < bridgeSize * numBridges * 2 || bridgeSize <= 0) {
-            return [{ segment: chain, isBridge: false }];
-        }
-        
+        if (!(bridgeSize > 0) || !Number.isInteger(numBridges) || numBridges < 1)
+            throw new Error('Проверьте размер и количество мостиков.');
+        if (total <= bridgeSize * numBridges * 2)
+            throw new Error('Контур слишком короткий для заданных мостиков.');
         const interval = total / numBridges;
-        const bridgeStarts = Array.from({ length: numBridges }, (_, i) => 
-            interval * i + interval * 0.5
-        );
-        
-        const segments = [];
-        let curDist = 0;
-        let segPts = [chain[0]];
-        let bridgeIdx = 0;
-        let inBridge = false;
-        
-        for (let i = 0; i < chain.length - 1; i++) {
-            const p0 = chain[i];
-            const p1 = chain[i + 1];
-            const step = Math.hypot(p1[0] - p0[0], p1[1] - p0[1]);
-            if (step === 0) continue;
-            
-            const events = [];
-            if (bridgeIdx < bridgeStarts.length) {
-                const bs = bridgeStarts[bridgeIdx];
-                const be = bs + bridgeSize;
-                
-                for (const distEvent of [bs, be]) {
-                    const dLocal = distEvent - curDist;
-                    if (dLocal > 0 && dLocal < step) {
-                        const t = dLocal / step;
-                        events.push({ t, dist: distEvent });
-                    }
-                }
-            }
-            
-            events.sort((a, b) => a.t - b.t);
-            
-            for (const event of events) {
-                const interp = [
-                    p0[0] + event.t * (p1[0] - p0[0]),
-                    p0[1] + event.t * (p1[1] - p0[1])
-                ];
-                segPts.push(interp);
-                segments.push({ segment: [...segPts], isBridge });
-                segPts = [interp];
-                inBridge = !inBridge;
-                if (!inBridge) bridgeIdx++;
-            }
-            
-            segPts.push(p1);
-            curDist += step;
+        const events = [];
+        for (let i = 0; i < numBridges; i++) {
+            const start = interval * (i + 0.5) - bridgeSize / 2;
+            events.push({distance: start, bridge: true}, {distance: start + bridgeSize, bridge: false});
         }
-        
-        if (segPts.length >= 2) {
-            segments.push({ segment: segPts, isBridge });
+        const result = [];
+        let eventIndex = 0, distance = 0, bridge = false, points = [chain[0]];
+        for (let i = 1; i < chain.length; i++) {
+            const p0 = chain[i-1], p1 = chain[i];
+            const length = Math.hypot(p1[0]-p0[0], p1[1]-p0[1]);
+            if (!length) continue;
+            while (eventIndex < events.length && events[eventIndex].distance <= distance + length + 1e-9) {
+                const e = events[eventIndex++];
+                const t = Math.max(0, Math.min(1, (e.distance - distance) / length));
+                const p = [p0[0] + t*(p1[0]-p0[0]), p0[1] + t*(p1[1]-p0[1])];
+                points.push(p); result.push({segment: points, isBridge: bridge});
+                points = [p]; bridge = e.bridge;
+            }
+            points.push(p1); distance += length;
         }
-        
-        return segments;
+        if (points.length > 1) result.push({segment: points, isBridge: bridge});
+        return result;
     }
 }

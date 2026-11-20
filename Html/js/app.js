@@ -421,6 +421,10 @@ class PictureToGCodeApp {
                 this._generateReliefGCode();
             }
         } catch (err) {
+            this.currentGCode = '';
+            this.elements.gcodeOutput.textContent = '; Ошибка генерации. Проверьте параметры и повторите.';
+            this.elements.statsContent.style.display = 'none';
+            if (this.viewer3D) this.viewer3D.loadGCode('');
             this._hideLoading();
             alert(`Ошибка генерации G-кода: ${err.message}`);
             console.error(err);
@@ -512,11 +516,15 @@ class PictureToGCodeApp {
         this.chains = chains;
         this.chainsAreOpen = isCenterline;
 
-        // Параметры для контурной резки (один проход)
+        // Параметры для контурной резки
         const params = {
             toolDia: parseFloat(el.toolDiameter.value),
             feedrate: parseFloat(el.feedrate.value),
             finalDepth: parseFloat(el.depth.value),
+            numPasses: Number(el.numPasses.value),
+            bridgeMode: el.bridgeMode.checked,
+            bridgeSize: Number(el.bridgeSize.value),
+            bridgeCount: Number(el.bridgeCount.value),
             simplifyEps: parseFloat(el.simplifyEps.value),
             safeZ: parseFloat(el.safeZ.value),
             spindleSpeed: parseFloat(el.spindleSpeed.value),
