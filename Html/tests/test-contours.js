@@ -13,5 +13,3 @@ const center=run(`GCodeGenerator.chainsToGcode([[[0,0],[10,0]]],{toolDia:2,feedr
 assert.throws(()=>run(`Geometry.offsetContours([[[0,0],[10,0],[10,10],[0,10]]],1)`),/не замкнут/);
 assert.throws(()=>run(`Geometry.insertBridges([[0,0],[2,0]],2,2)`),/слишком короткий/);
 console.log('PASS multipass, bridges, nested offsets, rejected collapse, open centerline');
-
-
