@@ -622,7 +622,17 @@ class PictureToGCodeApp {
             return;
         }
 
-        const blob = new Blob([this.currentGCode], { type: 'text/plain' });
+        // TurboCNC and other DOS controllers require ASCII text with CRLF line endings.
+        // Comments may contain Unicode, so omit them without changing machine commands.
+        const dosGCode = this.currentGCode.split(/\r\n|\r|\n/)
+            .map(line => line.split(';', 1)[0].trim())
+            .filter(line => line.length > 0)
+            .join('\r\n') + '\r\n';
+        if (/[^\x00-\x7F]/.test(dosGCode)) {
+            alert('G-код содержит символы вне ASCII. Проверьте команды перед сохранением.');
+            return;
+        }
+        const blob = new Blob([dosGCode], { type: 'text/plain;charset=us-ascii' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
